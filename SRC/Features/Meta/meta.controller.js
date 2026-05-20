@@ -72,6 +72,10 @@ async function getStatus(req, res, next) {
     assertOrganizationUuid(req.query.organizationId);
     ensureActiveJwtMembership(req, req.query.organizationId);
 
+    if (process.env.META_SYSTEM_ACCESS_TOKEN) {
+      return res.json({ connected: true, isSystemToken: true });
+    }
+
     const { IntegrationsMeta } = require('../../Models');
     const integration = await IntegrationsMeta.findOne({
       where: { organizationId: req.query.organizationId, status: 'active' },
