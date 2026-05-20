@@ -40,9 +40,10 @@ function sumVideoAction(metricsJsonb, actionField) {
 
 async function getOverview(organizationId) {
   const [spendAgg] = await db.sequelize.query(
-    `SELECT COALESCE(SUM(spend), 0)::decimal AS total_spend
-     FROM ad_performance_daily
-     WHERE organization_id = :organizationId`,
+    `SELECT COALESCE(SUM(apd.spend), 0)::decimal AS total_spend
+     FROM ad_performance_daily apd
+     INNER JOIN ads a ON a.id = apd.ad_id
+     WHERE apd.organization_id = :organizationId`,
     {
       replacements: { organizationId },
       type: QueryTypes.SELECT,
@@ -51,11 +52,12 @@ async function getOverview(organizationId) {
 
   const roasWeighted = await db.sequelize.query(
     `SELECT
-       CASE WHEN SUM(spend) > 0 THEN
-         (SUM(COALESCE(roas, 0) * COALESCE(spend, 0)) / SUM(spend))::decimal
+       CASE WHEN SUM(apd.spend) > 0 THEN
+         (SUM(COALESCE(apd.roas, 0) * COALESCE(apd.spend, 0)) / SUM(apd.spend))::decimal
        END AS weighted_roas
-     FROM ad_performance_daily
-     WHERE organization_id = :organizationId`,
+     FROM ad_performance_daily apd
+     INNER JOIN ads a ON a.id = apd.ad_id
+     WHERE apd.organization_id = :organizationId`,
     {
       replacements: { organizationId },
       type: QueryTypes.SELECT,
@@ -66,10 +68,10 @@ async function getOverview(organizationId) {
     where: { organizationId },
   });
 
-  // Buscando todos os registros de performance para o Funil e os Rankings
+  // Buscando todos os registros de performance para o Funil e os Rankings (somente para anúncios importados)
   const perfRows = await db.AdPerformanceDaily.findAll({
     where: { organizationId },
-    include: [{ model: db.Ad, as: 'ad' }]
+    include: [{ model: db.Ad, as: 'ad', required: true }]
   });
 
   let totalCliques = 0;
