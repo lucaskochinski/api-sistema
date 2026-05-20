@@ -149,6 +149,13 @@ const port = Number(process.env.PORT || 3000);
 async function bootstrap() {
   await db.sequelize.authenticate();
 
+  // Permite recriar forçadamente todas as tabelas a partir dos Models em deploys limpos
+  if (String(process.env.DB_FORCE_SYNC || '').toLowerCase() === 'true') {
+    console.info('🔄 [DB_FORCE_SYNC] Dropando e recriando todas as tabelas do banco de dados...');
+    await db.sequelize.sync({ force: true });
+    console.info('✅ [DB_FORCE_SYNC] Todas as tabelas foram recriadas com sucesso!');
+  }
+
   await bootstrapDatabase().catch((e) => {
     console.warn('[bootstrapDatabase] falhou (migrate / DB?):', e?.message || e);
   });
