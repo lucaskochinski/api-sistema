@@ -153,11 +153,11 @@ async function getOverview(organizationId) {
       roasWeighted[0]?.weighted_roas != null ? String(roasWeighted[0].weighted_roas) : null,
     creativeAnalysesCount: analyzed,
     funnel: {
-      cliques: totalCliques || 477, // fallback elegante para demo se zerado
-      pageViews: totalPageViews || 353,
-      initiateCheckouts: totalInitiateCheckouts || 68,
-      vendasIniciadas: Math.round(totalPurchases * 1.5) || 37,
-      vendasAprovadas: totalPurchases || 21,
+      cliques: totalCliques,
+      pageViews: totalPageViews,
+      initiateCheckouts: totalInitiateCheckouts,
+      vendasIniciadas: Math.round(totalPurchases * 1.3),
+      vendasAprovadas: totalPurchases,
     },
     rankings: {
       bestHook: bestHook ? `${bestHook.item.name} (${bestHook.score.toFixed(1)}%)` : 'Sem dados',
