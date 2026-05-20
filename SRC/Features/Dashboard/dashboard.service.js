@@ -201,8 +201,8 @@ async function getInsights(
   const countSql = `
     SELECT COUNT(*)::int AS cnt
     FROM ads ad
-    INNER JOIN ad_sets asn ON asn.id = ad.ad_set_id
-    INNER JOIN campaigns camp ON camp.id = asn.campaign_id AND camp.organization_id = :organizationId
+    LEFT JOIN ad_sets asn ON asn.id = ad.ad_set_id
+    LEFT JOIN campaigns camp ON camp.id = asn.campaign_id AND camp.organization_id = :organizationId
     WHERE ad.organization_id = :organizationId ${campaignClause}
   `;
 
@@ -263,8 +263,8 @@ async function getInsights(
         (p.clicks_sum::numeric / p.impressions_sum::numeric)
       ELSE NULL END AS rollup_ctr_eff
     FROM ads ad
-    INNER JOIN ad_sets asn ON asn.id = ad.ad_set_id
-    INNER JOIN campaigns camp ON camp.id = asn.campaign_id AND camp.organization_id = :organizationId
+    LEFT JOIN ad_sets asn ON asn.id = ad.ad_set_id
+    LEFT JOIN campaigns camp ON camp.id = asn.campaign_id AND camp.organization_id = :organizationId
     LEFT JOIN latest_ca ca ON ca.ad_id = ad.id
     LEFT JOIN media_assets ma ON ma.id = ca.media_id
     LEFT JOIN perf p ON p.ad_id = ad.id
