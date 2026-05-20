@@ -11,5 +11,6 @@ router.use(authMiddleware);
 router.get('/overview', dashboardController.overview);
 router.get('/insights', dashboardController.insights);
 router.get('/imported-campaigns', dashboardController.importedCampaigns);
+router.get('/external-sales/:platform', dashboardController.getExternalSalesStats);
 
 module.exports = router;
