@@ -67,7 +67,25 @@ async function oauthCallback(req, res, next) {
   }
 }
 
+async function getStatus(req, res, next) {
+  try {
+    assertOrganizationUuid(req.query.organizationId);
+    ensureActiveJwtMembership(req, req.query.organizationId);
+
+    const { IntegrationsMeta } = require('../../Models');
+    const integration = await IntegrationsMeta.findOne({
+      where: { organizationId: req.query.organizationId, status: 'active' },
+    });
+
+    res.json({ connected: !!integration });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   oauthAuthorizeUrl,
   oauthCallback,
+  getStatus,
 };
+

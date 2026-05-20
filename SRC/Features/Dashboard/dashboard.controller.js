@@ -213,9 +213,23 @@ async function getExternalSalesStats(req, res, next) {
   }
 }
 
+async function refreshMedia(req, res, next) {
+  try {
+    const organizationId = resolveOrganizationId(req);
+    ensureMembershipMatches(req, organizationId);
+    assertUuid(req.params.mediaId, 'media_id');
+
+    const data = await dashboardService.refreshMediaUrl(organizationId, req.params.mediaId);
+    res.json(data);
+  } catch (e) {
+    next(e);
+  }
+}
+
 module.exports = {
   overview,
   insights,
   importedCampaigns,
   getExternalSalesStats,
+  refreshMedia,
 };

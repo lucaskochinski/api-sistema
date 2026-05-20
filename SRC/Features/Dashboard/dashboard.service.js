@@ -2,6 +2,8 @@
 
 const { QueryTypes } = require('sequelize');
 const db = require('../../Models');
+const metaService = require('../Meta/meta.service');
+const graph = require('../../Services/meta_graph.client');
 
 function clampInt(value, fallback, max) {
   const n = Number.parseInt(value, 10);
@@ -256,8 +258,60 @@ async function listImportedCampaigns(organizationId) {
   });
 }
 
+async function refreshMediaUrl(organizationId, mediaId) {
+  const analysis = await db.CreativeAnalysis.findOne({
+    where: { organizationId, mediaId },
+    include: [{ model: db.MediaAsset, as: 'media' }]
+  });
+  
+  if (!analysis || !analysis.media) {
+    const err = new Error('media_not_found');
+    err.statusCode = 404;
+    throw err;
+  }
+  
+  const media = analysis.media;
+  if (!media.metaVideoId && (!media.ingestMetadata || !media.ingestMetadata.metaAdGraphId)) {
+    const err = new Error('no_meta_reference_for_refresh');
+    err.statusCode = 400;
+    throw err;
+  }
+  
+  const { accessToken } = await metaService.getValidToken(organizationId);
+  
+  if (media.metaVideoId) {
+    try {
+      const vhead = await graph.fbGet(accessToken, String(media.metaVideoId), {
+        fields: 'source,picture',
+      });
+      return {
+        type: 'video',
+        url: vhead.source,
+        thumbnailUrl: vhead.picture,
+      };
+    } catch (e) {
+      console.warn(`[Refresh] Failed to get video source for ${media.metaVideoId}`, e.message);
+    }
+  }
+  
+  if (media.ingestMetadata?.metaAdGraphId) {
+    const adGraphId = media.ingestMetadata.metaAdGraphId;
+    const adData = await graph.fbGet(accessToken, String(adGraphId), {
+      fields: 'creative{image_url,thumbnail_url}',
+    });
+    return {
+      type: 'image',
+      url: adData.creative?.image_url || adData.creative?.thumbnail_url,
+      thumbnailUrl: adData.creative?.thumbnail_url || adData.creative?.image_url,
+    };
+  }
+  
+  return { type: 'unknown', url: null, thumbnailUrl: null };
+}
+
 module.exports = {
   getOverview,
   getInsights,
   listImportedCampaigns,
+  refreshMediaUrl,
 };

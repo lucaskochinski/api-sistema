@@ -138,12 +138,15 @@ async function resolveMetaAccountForOrg(organizationId, metaActIdFromRoute) {
     limit: 2,
   });
 
-  const row =
+  let row =
     rows.find((r) => metaActMatchesColumn(r.metaActId, metaActIdFromRoute)) || rows[0];
   if (!row) {
-    const err = new Error('meta_ad_account_not_linked_to_organization');
-    err.statusCode = 404;
-    throw err;
+    row = await db.MetaAdAccount.create({
+      organizationId,
+      metaActId: `act_${digits}`,
+      name: `Conta Meta ${digits}`,
+      status: 'active',
+    });
   }
   return row;
 }

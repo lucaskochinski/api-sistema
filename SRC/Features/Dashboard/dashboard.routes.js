@@ -12,5 +12,6 @@ router.get('/overview', dashboardController.overview);
 router.get('/insights', dashboardController.insights);
 router.get('/imported-campaigns', dashboardController.importedCampaigns);
 router.get('/external-sales/:platform', dashboardController.getExternalSalesStats);
+router.get('/media-refresh/:mediaId', dashboardController.refreshMedia);
 
 module.exports = router;
