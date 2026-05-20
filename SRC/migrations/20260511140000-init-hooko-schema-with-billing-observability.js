@@ -13,6 +13,15 @@ module.exports = {
   async up(queryInterface, Sequelize) {
     const q = Sequelize;
 
+    // Se a flag de recriação forçada estiver ativa, limpa todo o banco antes de criar
+    if (String(process.env.DB_FORCE_SYNC || '').toLowerCase() === 'true') {
+      console.info('💥 [DB_FORCE_SYNC] Dropando todas as tabelas via down() para iniciar migração limpa...');
+      await module.exports.down(queryInterface).catch((e) => {
+        console.warn('⚠️ [DB_FORCE_SYNC] Falha ao dropar tabelas antigas:', e?.message || e);
+      });
+      console.info('✅ [DB_FORCE_SYNC] Tabelas antigas dropadas.');
+    }
+
     await queryInterface.sequelize.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
 
     await queryInterface.createTable('organizations', {
