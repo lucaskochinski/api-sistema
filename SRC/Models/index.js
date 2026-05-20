@@ -33,6 +33,7 @@ const modelFactories = [
   require('./payment_transaction'),
   require('./usage_counter'),
   require('./system_setting'),
+  require('./external_sale'),
 ];
 
 modelFactories.forEach((factory) => {

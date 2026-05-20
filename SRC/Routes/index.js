@@ -11,6 +11,7 @@ const metasyncRoutes = require('../Features/MetaSync/metasync.routes');
 const dashboardRoutes = require('../Features/Dashboard/dashboard.routes');
 const billingRoutes = require('../Features/Billing/billing.routes');
 const plansRoutes = require('../Features/Plans/plans.routes');
+const webhooksController = require('../Controllers/webhooks.controller');
 
 /** Agrega rotas versionáveis sob `/api` */
 const router = Router();
@@ -25,5 +26,8 @@ router.use('/dashboard', dashboardRoutes);
 router.use('/plans', plansRoutes);
 router.use('/billing', billingRoutes);
 router.use('/admin', adminRoutes);
+
+// Rota pública de Webhook de Vendas Externas (Utmify, Pagtrust, Lovable, Hooko, Vturb)
+router.post('/webhooks/:platform', webhooksController.processExternalWebhook);
 
 module.exports = router;
