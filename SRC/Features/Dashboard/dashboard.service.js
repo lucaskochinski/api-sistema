@@ -409,9 +409,111 @@ async function refreshMediaUrl(organizationId, mediaId) {
   return { type: 'unknown', url: null, thumbnailUrl: null };
 }
 
+async function getInsightDetails(organizationId, adId) {
+  const sql = `
+    WITH latest_ca AS (
+      SELECT DISTINCT ON (ad_id)
+        id, ad_id, media_id, ai_analysis, performance_snapshot
+      FROM creative_analyses
+      WHERE organization_id = :organizationId
+      ORDER BY ad_id, analyzed_at DESC
+    )
+    SELECT
+      ad.id AS ad_id,
+      ad.name AS ad_name,
+      ad.raw_creative_data,
+      ca.id AS creative_analysis_id,
+      ca.ai_analysis,
+      ca.performance_snapshot,
+      ma.google_drive_file_id,
+      ma.ingest_metadata
+    FROM ads ad
+    LEFT JOIN latest_ca ca ON ca.ad_id = ad.id
+    LEFT JOIN media_assets ma ON ma.id = ca.media_id
+    WHERE ad.organization_id = :organizationId AND ad.id = :adId
+  `;
+
+  const rows = await db.sequelize.query(sql, {
+    replacements: { organizationId, adId },
+    type: db.sequelize.QueryTypes.SELECT,
+  });
+
+  if (!rows || rows.length === 0) {
+    const err = new Error('Ad not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const r = rows[0];
+
+  const perfRows = await db.AdPerformanceDaily.findAll({
+    where: { organizationId, adId },
+    order: [['date', 'ASC']]
+  });
+
+  const performance_daily = perfRows.map(p => ({
+    date: p.date,
+    label: new Date(p.date).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', timeZone: 'UTC' }),
+    spend: Number(p.spend || 0),
+    roas: Number(p.roas || 0),
+    ctr: Number(p.ctr || 0),
+    impressions: Number(p.impressions || 0),
+  }));
+
+  const rawCreative = r.raw_creative_data && typeof r.raw_creative_data === 'object' ? r.raw_creative_data : {};
+  
+  let primaryText = '';
+  let headline = '';
+  let ctaType = '';
+  let mediaUrl = null;
+
+  if (rawCreative.object_story_spec) {
+    const linkData = rawCreative.object_story_spec.link_data || {};
+    const videoData = rawCreative.object_story_spec.video_data || {};
+    primaryText = linkData.message || videoData.message || rawCreative.body || '';
+    headline = linkData.name || videoData.title || rawCreative.title || '';
+    ctaType = linkData.call_to_action?.type || videoData.call_to_action?.type || rawCreative.call_to_action_type || '';
+    mediaUrl = videoData.image_url || linkData.image_hash ? null : null; // Usually we use media_assets
+  } else if (rawCreative.asset_feed_spec) {
+    const texts = rawCreative.asset_feed_spec.bodies || [];
+    const titles = rawCreative.asset_feed_spec.titles || [];
+    const ctas = rawCreative.asset_feed_spec.call_to_action_types || [];
+    if (texts.length > 0) primaryText = texts[0].text || '';
+    if (titles.length > 0) headline = titles[0].text || '';
+    if (ctas.length > 0) ctaType = ctas[0] || '';
+  }
+
+  if (!primaryText) primaryText = rawCreative.body || '';
+  if (!headline) headline = rawCreative.title || r.ad_name;
+  if (!ctaType) ctaType = rawCreative.call_to_action_type || 'LEARN_MORE';
+
+  const ingestMeta = r.ingest_metadata && typeof r.ingest_metadata === 'object' ? r.ingest_metadata : {};
+  let thumbnailUrl = '/imagens/meta.png';
+  if (r.google_drive_file_id) {
+    thumbnailUrl = buildDriveThumbnailUrl(String(r.google_drive_file_id).trim());
+  } else if (ingestMeta.thumbnailUrl) {
+    thumbnailUrl = ingestMeta.thumbnailUrl;
+  } else if (rawCreative.thumbnail_url || rawCreative.image_url) {
+    thumbnailUrl = rawCreative.thumbnail_url || rawCreative.image_url;
+  }
+
+  return {
+    id: r.ad_id,
+    name: r.ad_name,
+    primary_text: primaryText,
+    headline: headline,
+    cta_type: ctaType,
+    media_url: thumbnailUrl,
+    performance_snapshot: r.performance_snapshot || { roas: 0, ctr: 0, spend: 0 },
+    performance_daily,
+    ai_analysis: r.ai_analysis || null,
+  };
+}
+
 module.exports = {
   getOverview,
   getInsights,
+  getInsightDetails,
   listImportedCampaigns,
   refreshMediaUrl,
 };

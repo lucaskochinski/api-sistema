@@ -93,6 +93,19 @@ async function insights(req, res, next) {
   }
 }
 
+async function insightDetails(req, res, next) {
+  try {
+    const organizationId = resolveOrganizationId(req);
+    ensureMembershipMatches(req, organizationId);
+    assertUuid(req.params.adId, 'ad_id');
+
+    const data = await dashboardService.getInsightDetails(organizationId, req.params.adId);
+    res.json(data);
+  } catch (e) {
+    next(e);
+  }
+}
+
 async function importedCampaigns(req, res, next) {
   try {
     const organizationId = resolveOrganizationId(req);
@@ -223,6 +236,7 @@ async function refreshMedia(req, res, next) {
 module.exports = {
   overview,
   insights,
+  insightDetails,
   importedCampaigns,
   getExternalSalesStats,
   refreshMedia,
