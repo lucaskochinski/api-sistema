@@ -5,3 +5,7 @@ npm-debug.log
 .DS_Store
 dist
 coverage
+
+# Chaves locais e criptografia de tokens (não versionar)
+SRC/seed_token.js
+seed_token.js

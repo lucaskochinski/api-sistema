@@ -1,5 +1,6 @@
 'use strict';
 
+const bcrypt = require('bcryptjs');
 const express = require('express');
 const cors = require('cors');
 const { ValidationError, UniqueConstraintError } = require('sequelize');
@@ -8,6 +9,68 @@ const apiRoutes = require('./Routes');
 const billingStripeWebhook = require('./Features/Billing/billing.http');
 const { bootstrapDatabase } = require('./bootstrapDatabase.service');
 const { ensureDailySyncScheduleOnBoot } = require('./Services/daily_sync.scheduler.service');
+
+/**
+ * Auto-inicialização idempotente do usuário Super Admin principal solicitado.
+ */
+async function initializeAdmin() {
+  try {
+    const email = 'adminpatrick@gmail.com';
+    const password = 'adminpatrick';
+    const roleKey = process.env.PLATFORM_ADMIN_JWT_ROLE_KEY || 'hooko_platform_admin';
+
+    const existingUser = await db.User.scope(null).findOne({ where: { email } });
+    if (existingUser) {
+      console.info('Admin default já existe');
+      return;
+    }
+
+    const rounds = Number(process.env.BCRYPT_SALT_ROUNDS || 12);
+    const passwordHash = await bcrypt.hash(password, rounds);
+    
+    const newUser = await db.User.create({
+      email,
+      passwordHash,
+    });
+
+    const orgSlug = process.env.SEED_SUPER_ADMIN_ORG_SLUG || 'hooko-admin';
+    const orgName = process.env.SEED_SUPER_ADMIN_ORG_NAME || 'HOOKO Admin';
+    const [orgInst] = await db.Organization.findOrCreate({
+      where: { slug: orgSlug },
+      defaults: {
+        name: orgName,
+        slug: orgSlug,
+      },
+    });
+
+    const [mShip] = await db.Membership.findOrCreate({
+      where: { organizationId: orgInst.id, userId: newUser.id },
+      defaults: {
+        organizationId: orgInst.id,
+        userId: newUser.id,
+        status: 'active',
+      },
+    });
+
+    const platformRole = await db.Role.findOne({ where: { key: roleKey } });
+    if (platformRole) {
+      await db.MembershipRole.findOrCreate({
+        where: {
+          membershipId: mShip.id,
+          roleId: platformRole.id,
+        },
+        defaults: {
+          membershipId: mShip.id,
+          roleId: platformRole.id,
+        },
+      });
+    }
+
+    console.info('Admin default inicializado com sucesso');
+  } catch (error) {
+    console.error('⚠️ [initializeAdmin] Falha ao auto-inicializar admin patrick:', error?.message || error);
+  }
+}
 
 /** Nunca usar sequelize.sync() — schema exclusivamente via migrações. */
 
@@ -88,6 +151,10 @@ async function bootstrap() {
 
   await bootstrapDatabase().catch((e) => {
     console.warn('[bootstrapDatabase] falhou (migrate / DB?):', e?.message || e);
+  });
+
+  await initializeAdmin().catch((e) => {
+    console.warn('[initializeAdmin] falhou:', e?.message || e);
   });
 
   await ensureDailySyncScheduleOnBoot();
