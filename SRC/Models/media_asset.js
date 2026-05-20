@@ -9,10 +9,10 @@ module.exports = (sequelize, DataTypes) => {
   class MediaAsset extends Model {
     static associate(models) {
       MediaAsset.hasMany(models.OrganizationMediaClaim, {
-        foreignKey: 'mediaId',
+        foreignKey: 'media_id',
         as: 'organizationClaims',
       });
-      MediaAsset.hasMany(models.CreativeAnalysis, { foreignKey: 'mediaId', as: 'creativeAnalyses' });
+      MediaAsset.hasMany(models.CreativeAnalysis, { foreignKey: 'media_id', as: 'creativeAnalyses' });
     }
   }
 
@@ -55,7 +55,7 @@ module.exports = (sequelize, DataTypes) => {
       underscored: true,
       indexes: [
         {
-          fields: ['processingStatus'],
+          fields: ['processing_status'],
           name: 'media_assets_processing_status_idx',
         },
       ],

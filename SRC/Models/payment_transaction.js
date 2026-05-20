@@ -10,14 +10,14 @@ module.exports = (sequelize, DataTypes) => {
   class PaymentTransaction extends Model {
     static associate(models) {
       PaymentTransaction.belongsTo(models.Organization, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'organization',
       });
       PaymentTransaction.belongsTo(models.Subscription, {
-        foreignKey: 'subscriptionId',
+        foreignKey: 'subscription_id',
         as: 'subscription',
       });
-      PaymentTransaction.belongsTo(models.Invoice, { foreignKey: 'invoiceId', as: 'invoice' });
+      PaymentTransaction.belongsTo(models.Invoice, { foreignKey: 'invoice_id', as: 'invoice' });
       PaymentTransaction.belongsTo(models.WebhookEventLog, {
         foreignKey: 'webhookEventLogId',
         as: 'webhookEventLog',
@@ -67,13 +67,13 @@ module.exports = (sequelize, DataTypes) => {
       indexes: [
         {
           unique: true,
-          fields: ['gateway', 'gatewayObjectId'],
+          fields: ['gateway', 'gateway_object_id'],
           name: 'payment_transactions_gateway_object_uidx',
         },
-        { fields: ['organizationId'], name: 'payment_transactions_organization_id_idx' },
-        { fields: ['invoiceId'], name: 'payment_transactions_invoice_id_idx' },
-        { fields: ['subscriptionId'], name: 'payment_transactions_subscription_id_idx' },
-        { fields: ['occurredAt'], name: 'payment_transactions_occurred_at_idx' },
+        { fields: ['organization_id'], name: 'payment_transactions_organization_id_idx' },
+        { fields: ['invoice_id'], name: 'payment_transactions_invoice_id_idx' },
+        { fields: ['subscription_id'], name: 'payment_transactions_subscription_id_idx' },
+        { fields: ['occurred_at'], name: 'payment_transactions_occurred_at_idx' },
       ],
     },
   );

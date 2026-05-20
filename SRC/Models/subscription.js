@@ -9,14 +9,14 @@ const { Model } = require('sequelize');
 module.exports = (sequelize, DataTypes) => {
   class Subscription extends Model {
     static associate(models) {
-      Subscription.belongsTo(models.Organization, { foreignKey: 'organizationId', as: 'organization' });
+      Subscription.belongsTo(models.Organization, { foreignKey: 'organization_id', as: 'organization' });
       Subscription.belongsTo(models.Plan, { foreignKey: 'planId', as: 'plan' });
       Subscription.hasMany(models.Invoice, {
-        foreignKey: 'subscriptionId',
+        foreignKey: 'subscription_id',
         as: 'invoices',
       });
       Subscription.hasMany(models.PaymentTransaction, {
-        foreignKey: 'subscriptionId',
+        foreignKey: 'subscription_id',
         as: 'paymentTransactions',
       });
     }
@@ -106,12 +106,12 @@ module.exports = (sequelize, DataTypes) => {
       indexes: [
         {
           unique: true,
-          fields: ['stripeSubscriptionId'],
+          fields: ['stripe_subscription_id'],
           name: 'subscriptions_stripe_sub_uidx',
         },
-        { fields: ['organizationId'], name: 'subscriptions_organization_id_idx' },
+        { fields: ['organization_id'], name: 'subscriptions_organization_id_idx' },
         {
-          fields: ['organizationId', 'status'],
+          fields: ['organization_id', 'status'],
           name: 'subscriptions_organization_status_idx',
         },
       ],

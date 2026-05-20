@@ -10,18 +10,18 @@ module.exports = (sequelize, DataTypes) => {
     static associate(models) {
       Role.belongsToMany(models.Permission, {
         through: models.RolePermission,
-        foreignKey: 'roleId',
+        foreignKey: 'role_id',
         otherKey: 'permissionId',
         as: 'permissions',
       });
-      Role.hasMany(models.RolePermission, { foreignKey: 'roleId', as: 'rolePermissions' });
+      Role.hasMany(models.RolePermission, { foreignKey: 'role_id', as: 'rolePermissions' });
       Role.belongsToMany(models.Membership, {
         through: models.MembershipRole,
-        foreignKey: 'roleId',
-        otherKey: 'membershipId',
+        foreignKey: 'role_id',
+        otherKey: 'membership_id',
         as: 'memberships',
       });
-      Role.hasMany(models.MembershipRole, { foreignKey: 'roleId', as: 'membershipRoles' });
+      Role.hasMany(models.MembershipRole, { foreignKey: 'role_id', as: 'membershipRoles' });
     }
   }
 

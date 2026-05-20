@@ -6,7 +6,7 @@ const { Model } = require('sequelize');
 module.exports = (sequelize, DataTypes) => {
   class UsageCounter extends Model {
     static associate(models) {
-      UsageCounter.belongsTo(models.Organization, { foreignKey: 'organizationId', as: 'organization' });
+      UsageCounter.belongsTo(models.Organization, { foreignKey: 'organization_id', as: 'organization' });
     }
   }
 
@@ -43,7 +43,7 @@ module.exports = (sequelize, DataTypes) => {
       indexes: [
         {
           unique: true,
-          fields: ['organizationId', 'metricKey', 'periodLabel'],
+          fields: ['organization_id', 'metric_key', 'period_label'],
           name: 'usage_counters_org_metric_period_uidx',
         },
       ],

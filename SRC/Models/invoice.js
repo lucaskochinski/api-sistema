@@ -9,8 +9,8 @@ const { Model } = require('sequelize');
 module.exports = (sequelize, DataTypes) => {
   class Invoice extends Model {
     static associate(models) {
-      Invoice.belongsTo(models.Organization, { foreignKey: 'organizationId', as: 'organization' });
-      Invoice.belongsTo(models.Subscription, { foreignKey: 'subscriptionId', as: 'subscription' });
+      Invoice.belongsTo(models.Organization, { foreignKey: 'organization_id', as: 'organization' });
+      Invoice.belongsTo(models.Subscription, { foreignKey: 'subscription_id', as: 'subscription' });
       Invoice.hasMany(models.PaymentTransaction, { foreignKey: 'invoiceId', as: 'paymentTransactions' });
     }
   }
@@ -73,13 +73,13 @@ module.exports = (sequelize, DataTypes) => {
       tableName: 'invoices',
       underscored: true,
       indexes: [
-        { unique: true, fields: ['stripeInvoiceId'], name: 'invoices_stripe_invoice_id_uidx' },
-        { fields: ['organizationId'], name: 'invoices_organization_id_idx' },
+        { unique: true, fields: ['stripe_invoice_id'], name: 'invoices_stripe_invoice_id_uidx' },
+        { fields: ['organization_id'], name: 'invoices_organization_id_idx' },
         {
-          fields: ['organizationId', 'status'],
+          fields: ['organization_id', 'status'],
           name: 'invoices_organization_status_idx',
         },
-        { fields: ['subscriptionId'], name: 'invoices_subscription_id_idx' },
+        { fields: ['subscription_id'], name: 'invoices_subscription_id_idx' },
       ],
     },
   );

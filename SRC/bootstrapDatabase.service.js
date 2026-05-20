@@ -27,16 +27,24 @@ const PLATFORM_ROLE_KEY =
  * Garante operador inicial + org central + Super Admin (`hooko_platform_admin`) — idempotente.
  */
 async function bootstrapDatabase() {
-  const platformRole = await db.Role.findOne({
+  // Auto-seeda as roles necessárias para o sistema funcionar caso não existam
+  const [platformRole] = await db.Role.findOrCreate({
     where: { key: PLATFORM_ROLE_KEY },
+    defaults: {
+      id: 'a0000004-7000-4000-a000-000000000003',
+      key: PLATFORM_ROLE_KEY,
+      name: 'Administrador da plataforma HOOKO',
+    },
   });
-  if (!platformRole) {
-    console.error(
-      '[bootstrapDatabase] Falta `%s`. Rode migrações (roles seed).',
-      PLATFORM_ROLE_KEY,
-    );
-    return;
-  }
+
+  await db.Role.findOrCreate({
+    where: { key: 'admin' },
+    defaults: {
+      id: 'a0000004-7000-4000-a000-000000000002',
+      key: 'admin',
+      name: 'Administrador da organização',
+    },
+  });
 
   const [u, createdUser] = await db.User.scope(null).findOrCreate({
     where: { email: ADMIN_EMAIL },

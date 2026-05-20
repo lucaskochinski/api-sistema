@@ -6,8 +6,8 @@ const { Model } = require('sequelize');
 module.exports = (sequelize, DataTypes) => {
   class MembershipRole extends Model {
     static associate(models) {
-      MembershipRole.belongsTo(models.Membership, { foreignKey: 'membershipId', as: 'membership' });
-      MembershipRole.belongsTo(models.Role, { foreignKey: 'roleId', as: 'role' });
+      MembershipRole.belongsTo(models.Membership, { foreignKey: 'membership_id', as: 'membership' });
+      MembershipRole.belongsTo(models.Role, { foreignKey: 'role_id', as: 'role' });
     }
   }
 
@@ -31,8 +31,8 @@ module.exports = (sequelize, DataTypes) => {
       underscored: true,
       timestamps: false,
       indexes: [
-        { fields: ['membershipId'], name: 'membership_roles_membership_id_idx' },
-        { fields: ['roleId'], name: 'membership_roles_role_id_idx' },
+        { fields: ['membership_id'], name: 'membership_roles_membership_id_idx' },
+        { fields: ['role_id'], name: 'membership_roles_role_id_idx' },
       ],
     },
   );

@@ -11,12 +11,12 @@ module.exports = (sequelize, DataTypes) => {
   class CreativeAnalysis extends Model {
     static associate(models) {
       CreativeAnalysis.belongsTo(models.Organization, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'organization',
       });
-      CreativeAnalysis.belongsTo(models.Ad, { foreignKey: 'adId', as: 'ad' });
+      CreativeAnalysis.belongsTo(models.Ad, { foreignKey: 'ad_id', as: 'ad' });
       CreativeAnalysis.belongsTo(models.MediaAsset, {
-        foreignKey: 'mediaId',
+        foreignKey: 'media_id',
         as: 'mediaAsset',
       });
     }
@@ -89,11 +89,11 @@ module.exports = (sequelize, DataTypes) => {
       tableName: 'creative_analyses',
       underscored: true,
       indexes: [
-        { fields: ['organizationId'], name: 'creative_analyses_organization_id_idx' },
-        { fields: ['adId'], name: 'creative_analyses_ad_id_idx' },
-        { fields: ['mediaId'], name: 'creative_analyses_media_id_idx' },
-        { fields: ['organizationId', 'analyzedAt'], name: 'creative_analyses_org_analyzed_at_idx' },
-        { fields: ['organizationId', 'adId', 'analyzedAt'], name: 'creative_analyses_org_ad_ts_idx' },
+        { fields: ['organization_id'], name: 'creative_analyses_organization_id_idx' },
+        { fields: ['ad_id'], name: 'creative_analyses_ad_id_idx' },
+        { fields: ['media_id'], name: 'creative_analyses_media_id_idx' },
+        { fields: ['organization_id', 'analyzed_at'], name: 'creative_analyses_org_analyzed_at_idx' },
+        { fields: ['organization_id', 'ad_id', 'analyzed_at'], name: 'creative_analyses_org_ad_ts_idx' },
       ],
     },
   );

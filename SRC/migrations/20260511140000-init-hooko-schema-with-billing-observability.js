@@ -19,11 +19,11 @@ module.exports = {
     const q = Sequelize;
 
     // Garante que o banco comece 100% limpo dropando em cascata todas as tabelas anteriores (apenas uma única vez)
-    console.info('💥 [MIGRATION INIT] Limpando tabelas pré-existentes via down() para garantir instalação 100% limpa...');
-    await module.exports.down(queryInterface).catch((e) => {
-      console.warn('⚠️ [MIGRATION INIT] Aviso ao dropar tabelas antigas (pode ser ignorado):', e?.message || e);
-    });
-    console.info('✅ [MIGRATION INIT] Banco de dados limpo com sucesso!');
+    // console.info('💥 [MIGRATION INIT] Limpando tabelas pré-existentes via down() para garantir instalação 100% limpa...');
+    // await module.exports.down(queryInterface).catch((e) => {
+    //   console.warn('⚠️ [MIGRATION INIT] Aviso ao dropar tabelas antigas (pode ser ignorado):', e?.message || e);
+    // });
+    // console.info('✅ [MIGRATION INIT] Banco de dados limpo com sucesso!');
 
     await queryInterface.sequelize.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
 

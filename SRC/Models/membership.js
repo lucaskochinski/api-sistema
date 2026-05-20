@@ -8,16 +8,16 @@ const { Model } = require('sequelize');
 module.exports = (sequelize, DataTypes) => {
   class Membership extends Model {
     static associate(models) {
-      Membership.belongsTo(models.Organization, { foreignKey: 'organizationId', as: 'organization' });
-      Membership.belongsTo(models.User, { foreignKey: 'userId', as: 'user' });
+      Membership.belongsTo(models.Organization, { foreignKey: 'organization_id', as: 'organization' });
+      Membership.belongsTo(models.User, { foreignKey: 'user_id', as: 'user' });
       Membership.belongsToMany(models.Role, {
         through: models.MembershipRole,
-        foreignKey: 'membershipId',
-        otherKey: 'roleId',
+        foreignKey: 'membership_id',
+        otherKey: 'role_id',
         as: 'roles',
       });
       Membership.hasMany(models.MembershipRole, {
-        foreignKey: 'membershipId',
+        foreignKey: 'membership_id',
         as: 'membershipRoles',
       });
     }
@@ -55,10 +55,10 @@ module.exports = (sequelize, DataTypes) => {
       indexes: [
         {
           unique: true,
-          fields: ['organizationId', 'userId'],
+          fields: ['organization_id', 'user_id'],
           name: 'memberships_organization_user_uidx',
         },
-        { fields: ['userId'], name: 'memberships_user_id_idx' },
+        { fields: ['user_id'], name: 'memberships_user_id_idx' },
       ],
     },
   );

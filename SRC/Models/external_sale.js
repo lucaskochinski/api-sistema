@@ -9,7 +9,7 @@ module.exports = (sequelize, DataTypes) => {
   class ExternalSale extends Model {
     static associate(models) {
       ExternalSale.belongsTo(models.Organization, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'organization',
         onDelete: 'CASCADE',
       });

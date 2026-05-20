@@ -10,7 +10,7 @@ module.exports = (sequelize, DataTypes) => {
   class IntegrationsMeta extends Model {
     static associate(models) {
       IntegrationsMeta.belongsTo(models.Organization, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'organization',
       });
     }
@@ -57,7 +57,7 @@ module.exports = (sequelize, DataTypes) => {
       tableName: 'integrations_meta',
       underscored: true,
       indexes: [
-        { unique: true, fields: ['organizationId'], name: 'integrations_meta_organization_uidx' },
+        { unique: true, fields: ['organization_id'], name: 'integrations_meta_organization_uidx' },
         { fields: ['status'], name: 'integrations_meta_status_idx' },
       ],
     },

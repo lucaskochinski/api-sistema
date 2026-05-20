@@ -154,6 +154,10 @@ async function bootstrap() {
     console.info('🔄 [DB_FORCE_SYNC] Dropando e recriando todas as tabelas do banco de dados...');
     await db.sequelize.sync({ force: true });
     console.info('✅ [DB_FORCE_SYNC] Todas as tabelas foram recriadas com sucesso!');
+  } else {
+    console.info('🔄 [DB_SYNC] Sincronizando tabelas existentes...');
+    await db.sequelize.sync();
+    console.info('✅ [DB_SYNC] Tabelas sincronizadas com sucesso!');
   }
 
   await bootstrapDatabase().catch((e) => {

@@ -9,55 +9,55 @@ module.exports = (sequelize, DataTypes) => {
   class Organization extends Model {
     static associate(models) {
       Organization.hasMany(models.Membership, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'memberships',
       });
       Organization.hasMany(models.IntegrationsMeta, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'metaIntegrations',
       });
       Organization.hasMany(models.IntegrationsGoogleDrive, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'googleDriveIntegrations',
       });
       Organization.hasMany(models.MetaAdAccount, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'metaAdAccounts',
       });
-      Organization.hasMany(models.Campaign, { foreignKey: 'organizationId', as: 'campaigns' });
-      Organization.hasMany(models.AdSet, { foreignKey: 'organizationId', as: 'adSets' });
-      Organization.hasMany(models.Ad, { foreignKey: 'organizationId', as: 'ads' });
+      Organization.hasMany(models.Campaign, { foreignKey: 'organization_id', as: 'campaigns' });
+      Organization.hasMany(models.AdSet, { foreignKey: 'organization_id', as: 'adSets' });
+      Organization.hasMany(models.Ad, { foreignKey: 'organization_id', as: 'ads' });
       Organization.hasMany(models.OrganizationMediaClaim, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'mediaClaims',
       });
       Organization.hasMany(models.CreativeAnalysis, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'creativeAnalyses',
       });
       Organization.hasMany(models.AdPerformanceDaily, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'adPerformanceDaily',
       });
       Organization.hasMany(models.Subscription, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'subscriptions',
       });
-      Organization.hasMany(models.Invoice, { foreignKey: 'organizationId', as: 'invoices' });
+      Organization.hasMany(models.Invoice, { foreignKey: 'organization_id', as: 'invoices' });
       Organization.hasMany(models.WebhookEventLog, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'webhookEventLogs',
       });
       Organization.hasMany(models.PaymentTransaction, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'paymentTransactions',
       });
       Organization.hasMany(models.UsageCounter, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'usageCounters',
       });
       Organization.hasMany(models.Plan, {
-        foreignKey: 'customOrganizationId',
+        foreignKey: 'custom_organization_id',
         as: 'exclusivePlans',
       });
     }
@@ -90,7 +90,7 @@ module.exports = (sequelize, DataTypes) => {
       underscored: true,
       indexes: [
         { unique: true, fields: ['slug'], name: 'organizations_slug_uidx' },
-        { fields: ['stripeCustomerId'], name: 'organizations_stripe_customer_id_idx' },
+        { fields: ['stripe_customer_id'], name: 'organizations_stripe_customer_id_idx' },
       ],
     },
   );

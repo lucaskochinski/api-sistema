@@ -10,7 +10,7 @@ module.exports = (sequelize, DataTypes) => {
   class WebhookEventLog extends Model {
     static associate(models) {
       WebhookEventLog.belongsTo(models.Organization, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'organization',
       });
       WebhookEventLog.hasMany(models.PaymentTransaction, {
@@ -101,16 +101,16 @@ module.exports = (sequelize, DataTypes) => {
       indexes: [
         {
           unique: true,
-          fields: ['gateway', 'gatewayEventId'],
+          fields: ['gateway', 'gateway_event_id'],
           name: 'webhook_event_logs_gateway_event_uidx',
         },
         {
-          fields: ['gateway', 'eventType'],
+          fields: ['gateway', 'event_type'],
           name: 'webhook_event_logs_gateway_event_type_idx',
         },
-        { fields: ['processingStatus'], name: 'webhook_event_logs_processing_status_idx' },
-        { fields: ['processedAt'], name: 'webhook_event_logs_processed_at_idx' },
-        { fields: ['organizationId'], name: 'webhook_event_logs_organization_id_idx' },
+        { fields: ['processing_status'], name: 'webhook_event_logs_processing_status_idx' },
+        { fields: ['processed_at'], name: 'webhook_event_logs_processed_at_idx' },
+        { fields: ['organization_id'], name: 'webhook_event_logs_organization_id_idx' },
       ],
     },
   );

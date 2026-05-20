@@ -8,7 +8,7 @@ module.exports = (sequelize, DataTypes) => {
     static associate(models) {
       Plan.hasMany(models.Subscription, { foreignKey: 'planId', as: 'subscriptions' });
       Plan.belongsTo(models.Organization, {
-        foreignKey: 'customOrganizationId',
+        foreignKey: 'custom_organization_id',
         as: 'customOrganization',
       });
     }
@@ -71,14 +71,14 @@ module.exports = (sequelize, DataTypes) => {
       tableName: 'plans',
       underscored: true,
       indexes: [
-        { unique: true, fields: ['tierKey'], name: 'plans_tier_key_uidx' },
-        { fields: ['isActive'], name: 'plans_is_active_idx' },
+        { unique: true, fields: ['tier_key'], name: 'plans_tier_key_uidx' },
+        { fields: ['is_active'], name: 'plans_is_active_idx' },
         {
-          fields: ['customOrganizationId'],
+          fields: ['custom_organization_id'],
           name: 'plans_custom_organization_id_idx',
         },
         {
-          fields: ['isActive', 'isPublic'],
+          fields: ['is_active', 'is_public'],
           name: 'plans_active_public_idx',
         },
       ],

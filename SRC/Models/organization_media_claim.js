@@ -9,10 +9,10 @@ module.exports = (sequelize, DataTypes) => {
   class OrganizationMediaClaim extends Model {
     static associate(models) {
       OrganizationMediaClaim.belongsTo(models.Organization, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'organization',
       });
-      OrganizationMediaClaim.belongsTo(models.MediaAsset, { foreignKey: 'mediaId', as: 'mediaAsset' });
+      OrganizationMediaClaim.belongsTo(models.MediaAsset, { foreignKey: 'media_id', as: 'mediaAsset' });
     }
   }
 
@@ -51,10 +51,10 @@ module.exports = (sequelize, DataTypes) => {
       indexes: [
         {
           unique: true,
-          fields: ['organizationId', 'mediaId'],
+          fields: ['organization_id', 'media_id'],
           name: 'organization_media_claims_org_media_uidx',
         },
-        { fields: ['mediaId'], name: 'organization_media_claims_media_id_idx' },
+        { fields: ['media_id'], name: 'organization_media_claims_media_id_idx' },
       ],
     },
   );

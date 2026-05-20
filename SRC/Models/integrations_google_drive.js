@@ -9,7 +9,7 @@ module.exports = (sequelize, DataTypes) => {
   class IntegrationsGoogleDrive extends Model {
     static associate(models) {
       IntegrationsGoogleDrive.belongsTo(models.Organization, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'organization',
       });
     }
@@ -58,7 +58,7 @@ module.exports = (sequelize, DataTypes) => {
       indexes: [
         {
           unique: true,
-          fields: ['organizationId'],
+          fields: ['organization_id'],
           name: 'integrations_google_drive_organization_uidx',
         },
       ],

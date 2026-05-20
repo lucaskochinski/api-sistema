@@ -6,12 +6,12 @@ const { Model } = require('sequelize');
 module.exports = (sequelize, DataTypes) => {
   class Campaign extends Model {
     static associate(models) {
-      Campaign.belongsTo(models.Organization, { foreignKey: 'organizationId', as: 'organization' });
+      Campaign.belongsTo(models.Organization, { foreignKey: 'organization_id', as: 'organization' });
       Campaign.belongsTo(models.MetaAdAccount, {
-        foreignKey: 'metaAdAccountId',
+        foreignKey: 'meta_ad_account_id',
         as: 'metaAdAccount',
       });
-      Campaign.hasMany(models.AdSet, { foreignKey: 'campaignId', as: 'adSets' });
+      Campaign.hasMany(models.AdSet, { foreignKey: 'campaign_id', as: 'adSets' });
     }
   }
 
@@ -47,10 +47,10 @@ module.exports = (sequelize, DataTypes) => {
       indexes: [
         {
           unique: true,
-          fields: ['metaAdAccountId', 'metaCampaignId'],
+          fields: ['meta_ad_account_id', 'meta_campaign_id'],
           name: 'campaigns_account_campaign_uidx',
         },
-        { fields: ['organizationId'], name: 'campaigns_organization_id_idx' },
+        { fields: ['organization_id'], name: 'campaigns_organization_id_idx' },
       ],
     },
   );

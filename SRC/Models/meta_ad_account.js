@@ -8,8 +8,8 @@ const { Model } = require('sequelize');
 module.exports = (sequelize, DataTypes) => {
   class MetaAdAccount extends Model {
     static associate(models) {
-      MetaAdAccount.belongsTo(models.Organization, { foreignKey: 'organizationId', as: 'organization' });
-      MetaAdAccount.hasMany(models.Campaign, { foreignKey: 'metaAdAccountId', as: 'campaigns' });
+      MetaAdAccount.belongsTo(models.Organization, { foreignKey: 'organization_id', as: 'organization' });
+      MetaAdAccount.hasMany(models.Campaign, { foreignKey: 'meta_ad_account_id', as: 'campaigns' });
     }
   }
 
@@ -41,7 +41,7 @@ module.exports = (sequelize, DataTypes) => {
       indexes: [
         {
           unique: true,
-          fields: ['organizationId', 'metaActId'],
+          fields: ['organization_id', 'meta_act_id'],
           name: 'meta_ad_accounts_organization_act_uidx',
         },
       ],

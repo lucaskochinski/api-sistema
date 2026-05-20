@@ -10,10 +10,10 @@ module.exports = (sequelize, DataTypes) => {
   class AdPerformanceDaily extends Model {
     static associate(models) {
       AdPerformanceDaily.belongsTo(models.Organization, {
-        foreignKey: 'organizationId',
+        foreignKey: 'organization_id',
         as: 'organization',
       });
-      AdPerformanceDaily.belongsTo(models.Ad, { foreignKey: 'adId', as: 'ad' });
+      AdPerformanceDaily.belongsTo(models.Ad, { foreignKey: 'ad_id', as: 'ad' });
     }
   }
 
@@ -72,11 +72,11 @@ module.exports = (sequelize, DataTypes) => {
       indexes: [
         {
           unique: true,
-          fields: ['organizationId', 'adId', 'snapshotDate'],
+          fields: ['organization_id', 'ad_id', 'snapshot_date'],
           name: 'ad_performance_daily_org_ad_day_uidx',
         },
-        { fields: ['organizationId'], name: 'ad_performance_daily_organization_idx' },
-        { fields: ['snapshotDate'], name: 'ad_performance_daily_snapshot_date_idx' },
+        { fields: ['organization_id'], name: 'ad_performance_daily_organization_idx' },
+        { fields: ['snapshot_date'], name: 'ad_performance_daily_snapshot_date_idx' },
       ],
     },
   );
