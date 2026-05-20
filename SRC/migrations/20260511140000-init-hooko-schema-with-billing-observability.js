@@ -1,5 +1,6 @@
 'use strict';
 
+require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 const { DataTypes } = require('sequelize');
 
 /** Postgres JSONB singleton default helper */
