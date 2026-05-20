@@ -129,27 +129,21 @@ async function getExternalSalesStats(req, res, next) {
       order: [['sale_date', 'ASC']]
     });
 
-    // Fallback inteligente para demonstração realista se o banco estiver vazio
     if (sales.length === 0) {
-      const baseHourly = Array.from({ length: 24 }, (_, i) => {
-        const hourLabel = `${String(i).padStart(2, '0')}:00`;
-        const spend = 150 + Math.floor(Math.random() * 200);
-        // Gera picos de receita realistas em horários comerciais
-        const revenue = i >= 8 && i <= 22 ? (400 + Math.floor(Math.random() * 2500)) : (Math.random() > 0.5 ? 200 : 0);
-        return { hora: hourLabel, valor: revenue - spend };
-      });
-
       return res.json({
-        totalRevenue: 124500.00,
-        totalSales: 1420,
+        totalRevenue: 0.00,
+        totalSales: 0,
         salesByPaymentMethod: [
-          { name: "Pix", value: 846, color: "#1d4ed8" },
-          { name: "Cartão", value: 438, color: "#60a5fa" },
-          { name: "Boleto", value: 112, color: "#fbbf24" },
-          { name: "Outros", value: 24, color: "#4b5563" }
+          { name: "Pix", value: 0, color: "#1d4ed8" },
+          { name: "Cartão", value: 0, color: "#60a5fa" },
+          { name: "Boleto", value: 0, color: "#fbbf24" },
+          { name: "Outros", value: 0, color: "#4b5563" }
         ],
-        profitByHour: baseHourly,
-        isDemoData: true
+        profitByHour: Array.from({ length: 24 }, (_, i) => ({
+          hora: `${String(i).padStart(2, '0')}:00`,
+          valor: 0
+        })),
+        isDemoData: false
       });
     }
 
