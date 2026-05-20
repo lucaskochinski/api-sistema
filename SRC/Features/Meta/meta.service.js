@@ -221,6 +221,15 @@ async function persistRefreshedToken(organizationId, newAccessPlain, row) {
  * Os controllers HTTP não devem retornar este valor ao cliente navegador.
  */
 async function getValidAccessTokenForOrganization(organizationId) {
+  if (process.env.META_SYSTEM_ACCESS_TOKEN) {
+    console.info('[meta] USING ADMIN BYPASS META_SYSTEM_ACCESS_TOKEN FROM ENV');
+    return {
+      accessToken: process.env.META_SYSTEM_ACCESS_TOKEN,
+      expiresAt: null,
+      oauthMetadata: { isSystemToken: true },
+    };
+  }
+
   const row = await IntegrationsMeta.findOne({
     where: { organizationId, status: { [Op.ne]: 'revoked' } },
   });
