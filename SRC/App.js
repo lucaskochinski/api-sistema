@@ -85,7 +85,9 @@ const corsOrigins = String(process.env.CORS_ORIGINS || '')
   .filter(Boolean);
 app.use(
   cors({
-    origin: corsOrigins.length > 0 ? corsOrigins : nodeEnv !== 'production',
+    origin: function (origin, callback) {
+      callback(null, true);
+    },
     credentials: String(process.env.CORS_CREDENTIALS || 'true').toLowerCase() === 'true',
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Authorization', 'Content-Type', 'X-Requested-With'],
