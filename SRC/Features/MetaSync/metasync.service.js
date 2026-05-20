@@ -17,6 +17,21 @@ const GRAPH_PAGE_LIMIT = Math.min(
 const LIVE_CAM_FIELDS = ['id', 'name', 'status'].join(',');
 
 const ADSET_FIELDS = ['id', 'name', 'status', 'campaign_id', 'updated_time'].join(',');
+
+const CREATIVE_GRAPH_FIELDS = [
+  'id',
+  'name',
+  'body',
+  'title',
+  'call_to_action_type',
+  'thumbnail_url',
+  'image_url',
+  'video_id',
+  'object_story_spec',
+  'asset_feed_spec',
+  'effective_object_story_id',
+].join(',');
+
 const AD_FIELDS = [
   'id',
   'name',
@@ -24,7 +39,7 @@ const AD_FIELDS = [
   'adset_id',
   'campaign_id',
   'updated_time',
-  `creative{id,video_id,object_story_spec,thumbnail_url,image_url}`,
+  `creative{${CREATIVE_GRAPH_FIELDS}}`,
 ].join(',');
 
 /** Campos leves para listagem de ads numa campanha (thumbnail/capa). */
@@ -32,7 +47,7 @@ const LIVE_AD_FIELDS = [
   'id',
   'name',
   'status',
-  `creative{id,video_id,object_story_spec,thumbnail_url,image_url}`,
+  `creative{${CREATIVE_GRAPH_FIELDS}}`,
 ].join(',');
 
 const META_IMPORT_PIPELINE_LABEL = 'meta_creative_import';
