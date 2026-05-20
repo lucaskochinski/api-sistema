@@ -199,20 +199,11 @@ async function getInsights(
       : `p.roas_w DESC NULLS LAST, ca.roas DESC NULLS LAST, ca.analyzed_at DESC`;
 
   const countSql = `
-    WITH latest_ca AS (
-      SELECT DISTINCT ON (ad_id)
-        id, organization_id, ad_id, media_id, analyzed_at,
-        ctr, roas, spend, performance_snapshot, ai_analysis
-      FROM creative_analyses
-      WHERE organization_id = :organizationId
-      ORDER BY ad_id, analyzed_at DESC
-    )
     SELECT COUNT(*)::int AS cnt
-    FROM latest_ca ca
-    INNER JOIN ads ad ON ad.id = ca.ad_id AND ad.organization_id = :organizationId
+    FROM ads ad
     INNER JOIN ad_sets asn ON asn.id = ad.ad_set_id
     INNER JOIN campaigns camp ON camp.id = asn.campaign_id AND camp.organization_id = :organizationId
-    WHERE 1=1 ${campaignClause}
+    WHERE ad.organization_id = :organizationId ${campaignClause}
   `;
 
   /** @type {Array<{ cnt: number }>} */
@@ -248,7 +239,7 @@ async function getInsights(
       GROUP BY ad_id
     )
     SELECT
-      ca.id AS creative_analysis_id,
+      COALESCE(ca.id, ad.id) AS creative_analysis_id,
       ca.analyzed_at,
       ca.performance_snapshot,
       ca.ai_analysis,
@@ -271,13 +262,13 @@ async function getInsights(
       CASE WHEN COALESCE(p.impressions_sum, 0) > 0 THEN
         (p.clicks_sum::numeric / p.impressions_sum::numeric)
       ELSE NULL END AS rollup_ctr_eff
-    FROM latest_ca ca
-    INNER JOIN ads ad ON ad.id = ca.ad_id AND ad.organization_id = :organizationId
+    FROM ads ad
     INNER JOIN ad_sets asn ON asn.id = ad.ad_set_id
     INNER JOIN campaigns camp ON camp.id = asn.campaign_id AND camp.organization_id = :organizationId
-    INNER JOIN media_assets ma ON ma.id = ca.media_id
+    LEFT JOIN latest_ca ca ON ca.ad_id = ad.id
+    LEFT JOIN media_assets ma ON ma.id = ca.media_id
     LEFT JOIN perf p ON p.ad_id = ad.id
-    WHERE 1=1 ${campaignClause}
+    WHERE ad.organization_id = :organizationId ${campaignClause}
     ORDER BY ${orderExpr}
     LIMIT :limit OFFSET :offset
   `;
