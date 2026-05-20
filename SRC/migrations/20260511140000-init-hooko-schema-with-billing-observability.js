@@ -1,6 +1,10 @@
 'use strict';
 
-require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
+try {
+  require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
+} catch (_) {
+  // Ignora se o modulo dotenv não estiver instalado em produção (já que as variáveis são nativas do container)
+}
 const { DataTypes } = require('sequelize');
 
 /** Postgres JSONB singleton default helper */
