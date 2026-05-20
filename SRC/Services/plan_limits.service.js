@@ -35,7 +35,7 @@ function platformAdminBypassEmails() {
 function isPlatformSuperActor(actor) {
   if (!actor || typeof actor !== 'object') return false;
   const roles = Array.isArray(actor.roles) ? actor.roles : [];
-  if (roles.includes(platformAdminJwtRoleKey())) return true;
+  if (roles.includes('admin') || roles.includes(platformAdminJwtRoleKey())) return true;
   const em = normalizeEmail(actor.email || '');
   if (em && platformAdminBypassEmails().includes(em)) return true;
   return false;
