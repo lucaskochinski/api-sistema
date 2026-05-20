@@ -62,8 +62,6 @@ const INSIGHT_FIELDS = [
   'actions',
   'action_values',
   'purchase_roas',
-  'video_3_sec_watched_actions',
-  'video_p75_watched_actions',
   'video_play_actions',
 ].join(',');
 
