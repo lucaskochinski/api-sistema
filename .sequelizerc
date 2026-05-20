@@ -1,0 +1,10 @@
+'use strict';
+
+const path = require('path');
+
+module.exports = {
+  config: path.resolve('SRC', 'Config', 'database.config.js'),
+  'models-path': path.resolve('SRC', 'Models'),
+  'seeders-path': path.resolve('SRC', 'seeders'),
+  'migrations-path': path.resolve('SRC', 'migrations'),
+};
