@@ -17,6 +17,7 @@ router.get('/insights/:adId/meta-breakdowns', dashboardController.adMetaBreakdow
 router.get('/imported-campaigns', dashboardController.importedCampaigns);
 router.get('/creative-formats', dashboardController.creativeFormats);
 router.get('/external-sales/:platform', dashboardController.getExternalSalesStats);
+router.post('/insights/:adId/analyze', dashboardController.triggerAdAnalysis);
 router.get('/media-refresh/:mediaId', dashboardController.refreshMedia);
 
 module.exports = router;

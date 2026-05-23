@@ -217,6 +217,30 @@ async function getExternalSalesStats(req, res, next) {
   }
 }
 
+async function triggerAdAnalysis(req, res, next) {
+  try {
+    const organizationId = resolveOrganizationId(req);
+    ensureMembershipMatches(req, organizationId);
+    assertUuid(req.params.adId, 'ad_id');
+
+    const force = Boolean(req.body?.force || req.query?.force === '1' || req.query?.force === 'true');
+    const data = await dashboardService.triggerAdAnalysis(organizationId, req.params.adId, {
+      force,
+      actingUserProfile: {
+        email: req.user.email,
+        roles: Array.isArray(req.user.roles) ? req.user.roles : [],
+      },
+    });
+    res.status(202).json({
+      status: 'accepted',
+      message: 'video_analysis_job_queued',
+      ...data,
+    });
+  } catch (e) {
+    next(e);
+  }
+}
+
 async function refreshMedia(req, res, next) {
   try {
     const organizationId = resolveOrganizationId(req);
@@ -288,6 +312,7 @@ module.exports = {
   importedCampaigns,
   getExternalSalesStats,
   refreshMedia,
+  triggerAdAnalysis,
   creativeFormats,
   linkVturbVideo,
 };

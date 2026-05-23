@@ -24,6 +24,32 @@ function buildDriveThumbnailUrl(googleDriveFileId) {
   return `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w400`;
 }
 
+function mapAiProcessingState({ processingStatus, hasAnalysis, ingestMetadata }) {
+  if (hasAnalysis) {
+    return { status: 'completed', label: 'Análise concluída', pending: false };
+  }
+  const ps = String(processingStatus || '').trim().toLowerCase();
+  const meta = ingestMetadata && typeof ingestMetadata === 'object' ? ingestMetadata : {};
+  if (ps === 'failed' || ps === 'failed_ai') {
+    return {
+      status: ps,
+      label: ps === 'failed_ai' ? 'Falha na análise IA' : 'Falha no processamento',
+      pending: false,
+      error: meta.lastInsightError || meta.lastPipelineFailureReason || null,
+    };
+  }
+  if (['queued_video', 'transcribing', 'awaiting_ai', 'ingest'].includes(ps)) {
+    const labels = {
+      queued_video: 'Na fila de análise',
+      transcribing: 'Transcrevendo vídeo…',
+      awaiting_ai: 'Gerando insights com Gemini…',
+      ingest: 'Preparando mídia…',
+    };
+    return { status: ps, label: labels[ps] || 'Processando…', pending: true };
+  }
+  return { status: 'pending', label: 'Aguardando análise IA', pending: true };
+}
+
 function buildDriveViewUrl(googleDriveFileId) {
   const id = googleDriveFileId ? String(googleDriveFileId).trim() : '';
   if (!id) return null;
@@ -421,6 +447,90 @@ async function getOverview(organizationId, { period = 'today', adIds = null } = 
     };
   }
 
+  function shortAdLabel(name, adId) {
+    const s = String(name || '').trim();
+    if (s) {
+      if (s.length <= 14) return s;
+      return `${s.slice(0, 12)}…`;
+    }
+    return adId ? `Ad-${String(adId).slice(0, 4)}` : 'Anúncio';
+  }
+
+  function topAdsForChart(adListArg, scoreFn, { limit = 5, ascending = false } = {}) {
+    const rows = adListArg
+      .map((ad) => ({
+        adId: ad.adId,
+        name: ad.name,
+        shortName: shortAdLabel(ad.name, ad.adId),
+        value: scoreFn(ad),
+      }))
+      .filter((r) => r.value != null && Number.isFinite(r.value) && r.value > 0);
+    rows.sort((a, b) => (ascending ? a.value - b.value : b.value - a.value));
+    return rows.slice(0, limit).map((r) => ({
+      adId: r.adId,
+      name: r.name,
+      shortName: r.shortName,
+      value: Math.round(r.value * 1000) / 1000,
+    }));
+  }
+
+  const roiScoreFn = (ad) => {
+    if (ad.spend <= 0) return null;
+    if (ad.purchaseRevenue > 0) {
+      return ((ad.purchaseRevenue - ad.spend) / ad.spend) * 100;
+    }
+    if (ad.roasSpend > 0) {
+      const roasVal = ad.roasWeighted / ad.roasSpend;
+      return (roasVal - 1) * 100;
+    }
+    return null;
+  };
+
+  const rankingCharts = [
+    {
+      id: 'bestHook',
+      emoji: '🎣',
+      title: 'Melhores Hooks',
+      subtitle: 'views 3s / impressões',
+      unit: 'percent',
+      color: '#d4af37',
+      data: topAdsForChart(adList, (ad) =>
+        ad.impressions > 0 ? (ad.video3s / ad.impressions) * 100 : 0,
+      ),
+    },
+    {
+      id: 'bestRetention',
+      emoji: '🎬',
+      title: 'Melhor Body Retention',
+      subtitle: '75% assistidos / iniciados',
+      unit: 'percent',
+      color: '#b8941f',
+      data: topAdsForChart(adList, (ad) =>
+        ad.videoPlays > 0 ? (ad.video75 / ad.videoPlays) * 100 : 0,
+      ),
+    },
+    {
+      id: 'bestRoi',
+      emoji: '📈',
+      title: 'Maior ROI %',
+      subtitle: 'retorno sobre investimento',
+      unit: 'percent',
+      color: '#eab308',
+      data: topAdsForChart(adList, roiScoreFn),
+    },
+    {
+      id: 'bestRoas',
+      emoji: '💰',
+      title: 'Maior ROAS',
+      subtitle: 'receita / investimento',
+      unit: 'multiplier',
+      color: '#c9a227',
+      data: topAdsForChart(adList, (ad) =>
+        ad.roasSpend > 0 ? ad.roasWeighted / ad.roasSpend : 0,
+      ),
+    },
+  ];
+
   const bestHook = getBest(adList, (ad) =>
     ad.impressions > 0 ? (ad.video3s / ad.impressions) * 100 : 0,
   );
@@ -610,6 +720,7 @@ async function getOverview(organizationId, { period = 'today', adIds = null } = 
         : 'Sem dados',
     },
     rankingItems,
+    rankingCharts,
     metaTrafficSources: trafficSources,
     metaExtended,
   };
@@ -1002,6 +1113,7 @@ async function getInsights(
       ma.id AS media_id,
       ma.google_drive_file_id,
       ma.meta_video_id AS media_meta_video_id,
+      ma.processing_status AS media_processing_status,
       ma.ingest_metadata,
       camp.id AS campaign_id,
       camp.name AS campaign_name,
@@ -1070,6 +1182,11 @@ async function getInsights(
       metaCampaignId: r.meta_campaign_id,
       mediaId: r.media_id,
       thumbnailUrl,
+      aiProcessing: mapAiProcessingState({
+        processingStatus: r.media_processing_status,
+        hasAnalysis: Boolean(r.ai_analysis),
+        ingestMetadata: r.ingest_metadata,
+      }),
       driveViewUrl: gdf ? buildDriveViewUrl(gdf) : null,
       metaVideoId: r.media_meta_video_id || null,
       vturbVideoId: r.vturb_video_id || null,
@@ -1329,15 +1446,25 @@ async function getInsightDetails(organizationId, adId) {
   const isVideoAd =
     Boolean(metaVideoId) || String(rawCreative.object_type || '').toUpperCase() === 'VIDEO';
 
+  let mediaProcessingStatus = null;
+  let ingestMeta =
+    r.ingest_metadata && typeof r.ingest_metadata === 'object' ? r.ingest_metadata : {};
+
   if (!mediaId && metaVideoId) {
     const mediaRow = await db.MediaAsset.findOne({ where: { metaVideoId } });
     if (mediaRow) {
       mediaId = mediaRow.id;
       metaVideoId = mediaRow.metaVideoId;
+      mediaProcessingStatus = mediaRow.processingStatus;
+      ingestMeta = mediaRow.ingestMetadata || ingestMeta;
+    }
+  } else if (mediaId) {
+    const mediaRow = await db.MediaAsset.findByPk(mediaId);
+    if (mediaRow) {
+      mediaProcessingStatus = mediaRow.processingStatus;
+      ingestMeta = mediaRow.ingestMetadata || ingestMeta;
     }
   }
-
-  const ingestMeta = r.ingest_metadata && typeof r.ingest_metadata === 'object' ? r.ingest_metadata : {};
   const googleDriveFileId = r.google_drive_file_id
     ? String(r.google_drive_file_id).trim()
     : '';
@@ -1427,10 +1554,76 @@ async function getInsightDetails(organizationId, adId) {
     ai_ui: aiCreativeUi.buildAiCreativeUi(r.ai_analysis || null, {
       videoMetrics: metaAggregated.video,
     }),
+    ai_processing: mapAiProcessingState({
+      processingStatus: mediaProcessingStatus,
+      hasAnalysis: Boolean(r.ai_analysis),
+      ingestMetadata: ingestMeta,
+    }),
+    transcript:
+      (r.ai_analysis && typeof r.ai_analysis === 'object' && r.ai_analysis.transcript) ||
+      (ingestMeta.transcriptFull && String(ingestMeta.transcriptFull).trim()) ||
+      null,
     delivery_note:
       performance_daily.length > 0
         ? null
         : 'Este anúncio não teve entrega (impressões/gasto) no período sincronizado na Meta.',
+  };
+}
+
+async function triggerAdAnalysis(organizationId, adId, { force = false, actingUserProfile = null } = {}) {
+  const adRow = await db.Ad.findOne({ where: { id: adId, organizationId } });
+  if (!adRow) {
+    const err = new Error('Ad not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const rawCreative =
+    adRow.rawCreativeData && typeof adRow.rawCreativeData === 'object'
+      ? adRow.rawCreativeData
+      : {};
+  let metaVideoId = adRow.metaVideoId || metaVideoPlayback.extractVideoIdFromRawCreative(rawCreative);
+  if (!metaVideoId) {
+    const err = new Error('ad_has_no_video_for_analysis');
+    err.statusCode = 422;
+    throw err;
+  }
+
+  let mediaRow = await db.MediaAsset.findOne({ where: { metaVideoId: String(metaVideoId) } });
+  if (!mediaRow) {
+    const err = new Error('media_not_found_for_ad');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  await db.OrganizationMediaClaim.findOrCreate({
+    where: { organizationId, mediaId: mediaRow.id },
+    defaults: {
+      source: 'manual_analyze',
+      claimMetadata: { triggeredFromAdId: adId },
+    },
+  });
+
+  const mediaService = require('../Media/media.service');
+  const queued = await mediaService.queueVideoAnalysis({
+    mediaId: mediaRow.id,
+    organizationId,
+    adId,
+    actingUserProfile,
+    force,
+  });
+
+  return {
+    adId,
+    mediaId: mediaRow.id,
+    jobId: queued.jobId,
+    skipTranscription: queued.skipTranscription,
+    processingStatus: queued.processingStatus,
+    aiProcessing: mapAiProcessingState({
+      processingStatus: queued.processingStatus,
+      hasAnalysis: false,
+      ingestMetadata: mediaRow.ingestMetadata,
+    }),
   };
 }
 
@@ -1565,6 +1758,8 @@ module.exports = {
   refreshMediaUrl,
   getCreativeFormats,
   linkVturbVideo,
+  triggerAdAnalysis,
+  mapAiProcessingState,
   aggregateExternalSalesStats,
   emptyExternalSalesPayload,
 };

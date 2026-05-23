@@ -6,6 +6,7 @@ const { createBullMqConnection } = require('./redisConnection');
 const { VIDEO_TRANSCRIPTION_QUEUE } = require('./queues/constants');
 const processor = require('./processors/videoTranscription.processor');
 const { pushDlqJob } = require('./queues/videoTranscription.queue');
+const { loadIntegrationConfig } = require('../Services/integration_config.service');
 
 const concurrency = Number(process.env.WORKER_VIDEO_CONCURRENCY || 3);
 const redisConnection = createBullMqConnection();
@@ -81,6 +82,9 @@ process.on('SIGTERM', shutdown);
 
 (async () => {
   await db.sequelize.authenticate();
+  await loadIntegrationConfig().catch((e) => {
+    console.warn('[worker:video] integration config load failed — using env only', e.message);
+  });
   console.info(`[worker:video] running queue="${VIDEO_TRANSCRIPTION_QUEUE}" concurrency=${concurrency}`);
 })().catch((e) => {
   console.error('[worker:video] bootstrap failed', e);

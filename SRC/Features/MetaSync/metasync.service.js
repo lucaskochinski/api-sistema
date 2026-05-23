@@ -371,7 +371,61 @@ async function ensureMediaClaimAndEnqueueIfNew({
         claimMetadata: { syncedFromMetaAdId: metaAdIdStr },
       },
     });
-    return { mediaId: existing.id, enqueued: false, existed: true };
+
+    const existingAnalysis = await db.CreativeAnalysis.findOne({
+      where: { organizationId, adId: adPk },
+      attributes: ['id'],
+    });
+    if (existingAnalysis) {
+      return { mediaId: existing.id, enqueued: false, existed: true };
+    }
+
+    const ingestAfterUpdate =
+      JSON.stringify(nextMeta) !== JSON.stringify(currentMeta)
+        ? nextMeta
+        : currentMeta;
+    const hasCachedTranscript = Boolean(
+      ingestAfterUpdate.transcriptFull && String(ingestAfterUpdate.transcriptFull).trim(),
+    );
+
+    const actingUserSnapshot =
+      actingUserProfile && (actingUserProfile.email || actingUserProfile.roles?.length)
+        ? {
+            email: actingUserProfile.email,
+            roles: Array.isArray(actingUserProfile.roles) ? actingUserProfile.roles : [],
+          }
+        : null;
+
+    const job = await enqueueVideoAnalyzeJob({
+      organizationId,
+      mediaId: existing.id,
+      adId: adPk,
+      requestedAt: new Date().toISOString(),
+      sourcePipeline: META_IMPORT_PIPELINE_LABEL,
+      actingUserSnapshot,
+      skipTranscription: hasCachedTranscript,
+    });
+
+    const busyStatuses = new Set(['queued_video', 'transcribing', 'awaiting_ai']);
+    if (!busyStatuses.has(String(existing.processingStatus || ''))) {
+      await existing.update({
+        processingStatus: hasCachedTranscript ? 'awaiting_ai' : 'queued_video',
+        ingestMetadata: {
+          ...ingestAfterUpdate,
+          analyzeRequestedAt: new Date().toISOString(),
+          lastQueuedJobId: job.id,
+          sharedVideoAnalysisForAd: adPk,
+        },
+      });
+    }
+
+    return {
+      mediaId: existing.id,
+      enqueued: true,
+      existed: true,
+      jobId: job.id,
+      reusedTranscript: hasCachedTranscript,
+    };
   }
 
   let graphVideoLength = null;

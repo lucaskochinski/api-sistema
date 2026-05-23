@@ -14,6 +14,13 @@ function assertUuid(value, field) {
   }
 }
 
+function hasCachedTranscript(media) {
+  const meta = media?.ingestMetadata && typeof media.ingestMetadata === 'object'
+    ? media.ingestMetadata
+    : {};
+  return Boolean(meta.transcriptFull && String(meta.transcriptFull).trim());
+}
+
 /**
  * Enfileira job BullMQ (não bloqueia na transcrição). Atualiza `media_assets.processing_status`.
  */
@@ -22,6 +29,7 @@ async function queueVideoAnalysis({
   organizationId,
   adId,
   actingUserProfile = null,
+  force = false,
 }) {
   assertUuid(mediaId, 'media_id');
   assertUuid(organizationId, 'organization_id');
@@ -50,10 +58,24 @@ async function queueVideoAnalysis({
     throw err;
   }
 
-  if (!media.googleDriveFileId) {
-    const err = new Error('media_requires_google_drive_file_id');
+  const driveFileId = media.googleDriveFileId ? String(media.googleDriveFileId).trim() : '';
+  const metaVid = media.metaVideoId ? String(media.metaVideoId).trim() : '';
+  if (!driveFileId && !metaVid) {
+    const err = new Error('media_missing_video_source');
     err.statusCode = 422;
     throw err;
+  }
+
+  if (!force) {
+    const existingAnalysis = await db.CreativeAnalysis.findOne({
+      where: { organizationId, adId },
+      attributes: ['id'],
+    });
+    if (existingAnalysis) {
+      const err = new Error('creative_analysis_already_exists');
+      err.statusCode = 409;
+      throw err;
+    }
   }
 
   const actingUserSnapshot =
@@ -64,26 +86,37 @@ async function queueVideoAnalysis({
         }
       : null;
 
+  const skipTranscription = hasCachedTranscript(media);
+
   const job = await enqueueVideoAnalyzeJob({
     mediaId,
     organizationId,
     adId,
     requestedAt: new Date().toISOString(),
+    sourcePipeline: force ? 'manual_reanalyze' : 'manual_analyze',
     actingUserSnapshot,
+    skipTranscription,
+    forceReanalyze: Boolean(force),
   });
 
   await media.update({
-    processingStatus: 'queued_video',
+    processingStatus: skipTranscription ? 'awaiting_ai' : 'queued_video',
     ingestMetadata: {
-      ...media.ingestMetadata,
+      ...(media.ingestMetadata || {}),
       analyzeRequestedAt: new Date().toISOString(),
       lastQueuedJobId: job.id,
+      lastAnalyzeTrigger: force ? 'reanalyze' : 'manual',
     },
   });
 
-  return { jobId: job.id };
+  return {
+    jobId: job.id,
+    skipTranscription,
+    processingStatus: skipTranscription ? 'awaiting_ai' : 'queued_video',
+  };
 }
 
 module.exports = {
   queueVideoAnalysis,
+  hasCachedTranscript,
 };
