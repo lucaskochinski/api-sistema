@@ -263,6 +263,7 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
     if (!row.adId) continue;
     if (!adMap.has(row.adId)) {
       adMap.set(row.adId, {
+        adId: row.adId,
         name: row.ad?.name || 'Anúncio ' + row.adId.slice(0, 4),
         spend: 0,
         impressions: 0,
@@ -271,6 +272,7 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
         initiateCheckouts: 0,
         addToCart: 0,
         purchases: 0,
+        purchaseRevenue: 0,
         video3s: 0,
         video75: 0,
         videoPlays: 0,
@@ -286,6 +288,7 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
     adData.initiateCheckouts += extracted.initiateCheckouts;
     adData.addToCart += extracted.addToCart;
     adData.purchases += extracted.purchases;
+    adData.purchaseRevenue += extracted.purchaseRevenue;
     adData.video3s += extracted.video3s;
     adData.video75 += extracted.video75;
     adData.videoPlays += extracted.videoPlays;
@@ -306,6 +309,19 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
     return sorted[0];
   };
 
+  function rankingEntry(best, formatScore) {
+    if (!best) {
+      return { adId: null, adName: null, score: null, display: 'Sem dados', hasData: false };
+    }
+    return {
+      adId: best.item.adId,
+      adName: best.item.name,
+      score: best.score,
+      display: formatScore(best.score),
+      hasData: true,
+    };
+  }
+
   const bestHook = getBest(adList, (ad) =>
     ad.impressions > 0 ? (ad.video3s / ad.impressions) * 100 : 0,
   );
@@ -323,10 +339,87 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
   const bestRoas = getBest(adList, (ad) =>
     ad.roasSpend > 0 ? ad.roasWeighted / ad.roasSpend : 0,
   );
+  const bestRoi = getBest(adList, (ad) => {
+    if (ad.spend <= 0) return null;
+    if (ad.purchaseRevenue > 0) {
+      return ((ad.purchaseRevenue - ad.spend) / ad.spend) * 100;
+    }
+    if (ad.roasSpend > 0) {
+      const roasVal = ad.roasWeighted / ad.roasSpend;
+      return (roasVal - 1) * 100;
+    }
+    return null;
+  });
   const bestSalesVolume = getBest(adList, (ad) => ad.purchases);
   const bestConversionRate = getBest(adList, (ad) =>
     ad.pageViews > 0 ? (ad.purchases / ad.pageViews) * 100 : 0,
   );
+
+  const rankingItems = [
+    {
+      id: 'bestHook',
+      title: 'Melhores ganchos',
+      subtitle: 'Views 3s ÷ impressões',
+      metaFields: ['video_3_sec_watched_actions', 'impressions'],
+      metaAvailable: true,
+      accent: '#ffd700',
+      ...rankingEntry(bestHook, (s) => `${s.toFixed(1)}%`),
+    },
+    {
+      id: 'bestRetention',
+      title: 'Melhor retenção no corpo',
+      subtitle: '75% assistido ÷ plays iniciados',
+      metaFields: ['video_p75_watched_actions', 'video_play_actions'],
+      metaAvailable: true,
+      accent: '#d4af37',
+      ...rankingEntry(bestRetention, (s) => `${s.toFixed(1)}%`),
+    },
+    {
+      id: 'bestCtr',
+      title: 'Maior CTR',
+      subtitle: 'Cliques ÷ impressões',
+      metaFields: ['clicks', 'impressions'],
+      metaAvailable: true,
+      accent: '#eab308',
+      ...rankingEntry(bestCtr, (s) => `${s.toFixed(2)}%`),
+    },
+    {
+      id: 'bestCostIc',
+      title: 'Menor custo de Initiate Checkout',
+      subtitle: 'Gasto ÷ ICs',
+      metaFields: ['spend', 'actions:initiate_checkout'],
+      metaAvailable: true,
+      accent: '#b8941f',
+      ...rankingEntry(bestCostIc, (s) => `R$ ${s.toFixed(2)}`),
+    },
+    {
+      id: 'bestRoi',
+      title: 'Maior ROI',
+      subtitle: '(Receita compra Meta − gasto) ÷ gasto',
+      metaFields: ['action_values:purchase', 'spend', 'purchase_roas'],
+      metaAvailable: true,
+      accent: '#f5e6b8',
+      ...rankingEntry(bestRoi, (s) => `${s.toFixed(1)}%`),
+    },
+    {
+      id: 'bestSalesVolume',
+      title: 'Maior volume de vendas',
+      subtitle: 'Compras atribuídas (pixel Meta)',
+      metaFields: ['actions:purchase'],
+      metaAvailable: true,
+      accent: '#c9a227',
+      ...rankingEntry(bestSalesVolume, (s) => `${Math.round(s)} vendas`),
+    },
+    {
+      id: 'bestConversionRate',
+      title: 'Maior conversão',
+      subtitle: 'Vendas ÷ page views',
+      metaFields: ['actions:purchase', 'actions:landing_page_view'],
+      metaAvailable: true,
+      accent: '#a38b2a',
+      ...rankingEntry(bestConversionRate, (s) => `${s.toFixed(2)}%`),
+    },
+  ];
 
   const dailyMeta = Array.from(dailyMap.values())
     .sort((a, b) => String(a.date).localeCompare(String(b.date)))
@@ -354,6 +447,14 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
       cliques: aggregated.delivery.clicks,
       ...aggregated.funnel,
     },
+    /** Funil estilo UTMify — base 100% = cliques Meta */
+    conversionFunnel: {
+      clicks: aggregated.delivery.clicks || 0,
+      pageViews: aggregated.funnel.pageViews || 0,
+      initiateCheckouts: aggregated.funnel.initiateCheckouts || 0,
+      addToCart: aggregated.funnel.addToCart || 0,
+      purchasesMeta: aggregated.funnel.purchases || 0,
+    },
     videoMetrics: aggregated.video,
     videoRetention: aggregated.videoRetention,
     videoPlayCurve: aggregated.videoPlayCurve,
@@ -373,6 +474,9 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
       bestRoas: bestRoas
         ? `${bestRoas.item.name} (${bestRoas.score.toFixed(2)} ROAS)`
         : 'Sem dados',
+      bestRoi: bestRoi
+        ? `${bestRoi.item.name} (${bestRoi.score.toFixed(1)}% ROI)`
+        : 'Sem dados',
       bestSalesVolume: bestSalesVolume
         ? `${bestSalesVolume.item.name} (${bestSalesVolume.score} vendas)`
         : 'Sem dados',
@@ -380,6 +484,318 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
         ? `${bestConversionRate.item.name} (${bestConversionRate.score.toFixed(1)}%)`
         : 'Sem dados',
     },
+    rankingItems,
+    /** Proxy até termos breakdown publisher_platform persistido — cliques/compras Meta agregados. */
+    metaTrafficSources: [
+      { label: 'Cliques (ads importados)', count: aggregated.delivery.clicks || 0 },
+      { label: 'Compras atrib. Meta', count: aggregated.funnel.purchases || 0 },
+      { label: 'Initiate Checkout', count: aggregated.funnel.initiateCheckouts || 0 },
+    ].filter((row) => row.count > 0),
+  };
+}
+
+const APPROVED_SALE_STATUSES = new Set([
+  'paid',
+  'approved',
+  'succeeded',
+  'pago',
+  'completed',
+]);
+const PENDING_SALE_STATUSES = new Set(['pending', 'waiting', 'pendente', 'processing']);
+const REFUND_SALE_STATUSES = new Set(['refunded', 'refund', 'reembolsado', 'chargeback']);
+
+const DAY_LABELS_PT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+function localYmd(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function parseYmdLocal(s) {
+  const [y, m, d] = String(s).split('-').map(Number);
+  return new Date(y, m - 1, d, 12, 0, 0, 0);
+}
+
+function formatDayChartLabel(ymd, { isLast, todayYmd, untilYmd }) {
+  if (ymd === todayYmd && ymd === untilYmd) return 'Hoje';
+  if (isLast && ymd === untilYmd) return 'Hoje';
+  const parts = ymd.split('-');
+  return `${parts[2]}/${parts[1]}`;
+}
+
+/** Série diária de receita aprovada PagTrust para gráfico de linha. */
+function buildRevenueByDaySeries(sales, since, until) {
+  const dailyMap = new Map();
+  for (const sale of sales) {
+    const statusClean = String(sale.status || '').toLowerCase();
+    if (!APPROVED_SALE_STATUSES.has(statusClean)) continue;
+    const ymd = localYmd(sale.saleDate);
+    const amt = parseFloat(sale.amount || 0);
+    dailyMap.set(ymd, (dailyMap.get(ymd) || 0) + amt);
+  }
+
+  const todayYmd = localYmd(new Date());
+  const start = parseYmdLocal(since);
+  const end = parseYmdLocal(until);
+  const out = [];
+
+  for (let cur = new Date(start); cur <= end; cur.setDate(cur.getDate() + 1)) {
+    const ymd = localYmd(cur);
+    out.push({
+      date: ymd,
+      label: '',
+      valor: Math.round((dailyMap.get(ymd) || 0) * 100) / 100,
+    });
+  }
+
+  for (let i = 0; i < out.length; i += 1) {
+    out[i].label = formatDayChartLabel(out[i].date, {
+      isLast: i === out.length - 1,
+      todayYmd,
+      untilYmd: until,
+    });
+  }
+
+  return out;
+}
+
+function emptyRevenueByDaySeries(since, until) {
+  if (!since || !until) return [];
+  return buildRevenueByDaySeries([], since, until);
+}
+
+function emptyExternalSalesPayload(since, until) {
+  return {
+    totalRevenue: 0,
+    totalSales: 0,
+    approvedSales: 0,
+    pendingSales: 0,
+    refundedSales: 0,
+    salesByPaymentMethod: [
+      { name: 'Pix', value: 0, color: '#1d4ed8' },
+      { name: 'Cartão', value: 0, color: '#60a5fa' },
+      { name: 'Boleto', value: 0, color: '#fbbf24' },
+      { name: 'Outros', value: 0, color: '#4b5563' },
+    ],
+    revenueByHour: Array.from({ length: 24 }, (_, i) => ({
+      hora: `${String(i).padStart(2, '0')}:00`,
+      valor: 0,
+    })),
+    profitByHour: Array.from({ length: 24 }, (_, i) => ({
+      hora: `${String(i).padStart(2, '0')}:00`,
+      receita: 0,
+      lucro: 0,
+    })),
+    cumulativeHourly: Array.from({ length: 24 }, (_, i) => ({
+      hora: `${String(i).padStart(2, '0')}:00`,
+      receitaAcum: 0,
+      investimentoAcum: 0,
+      lucroAcum: 0,
+    })),
+    revenueByDay: emptyRevenueByDaySeries(since, until),
+    salesByDayOfWeek: DAY_LABELS_PT.map((label) => ({ label, count: 0 })),
+    salesByProduct: [],
+    salesBySource: [],
+    approvalRates: [
+      { label: 'Pix', approved: 0, total: 0, pct: 0 },
+      { label: 'Cartão', approved: 0, total: 0, pct: 0 },
+      { label: 'Boleto', approved: 0, total: 0, pct: 0 },
+    ],
+    secondaryMetrics: {
+      arpu: 0,
+      marginPct: 0,
+      refundRatePct: 0,
+      cpa: 0,
+      overallApprovalPct: 0,
+    },
+    isDemoData: false,
+    dateRange: { since, until },
+  };
+}
+
+/**
+ * Agrega vendas externas (PagTrust/Utmify) para widgets do dashboard home.
+ * @param {Array} sales — rows ExternalSale
+ * @param {{ totalSpend?: number, metaPurchases?: number, creativeAnalyses?: number }} meta
+ */
+function aggregateExternalSalesStats(sales, meta = {}) {
+  const totalSpend = Number(meta.totalSpend || 0);
+  const metaPurchases = Number(meta.metaPurchases || 0);
+  const creativeAnalyses = Number(meta.creativeAnalyses || 0);
+  const since = meta.since || null;
+  const until = meta.until || null;
+
+  let totalRevenue = 0;
+  let approvedSales = 0;
+  let pendingSales = 0;
+  let refundedSales = 0;
+
+  let pixCount = 0;
+  let cardCount = 0;
+  let billetCount = 0;
+  let otherCount = 0;
+
+  const hourlyRevenue = Array.from({ length: 24 }, () => 0);
+  const dayOfWeekCounts = Array.from({ length: 7 }, () => 0);
+  const productMap = new Map();
+  const sourceMap = new Map();
+  const approvalMap = {
+    pix: { approved: 0, total: 0 },
+    credit_card: { approved: 0, total: 0 },
+    billet: { approved: 0, total: 0 },
+  };
+
+  for (const sale of sales) {
+    const amt = parseFloat(sale.amount || 0);
+    const statusClean = String(sale.status || '').toLowerCase();
+    const method = String(sale.paymentMethod || 'other').toLowerCase();
+    const isApproved = APPROVED_SALE_STATUSES.has(statusClean);
+    const isPending = PENDING_SALE_STATUSES.has(statusClean);
+    const isRefund = REFUND_SALE_STATUSES.has(statusClean);
+
+    if (isApproved) {
+      totalRevenue += amt;
+      approvedSales += 1;
+    } else if (isPending) pendingSales += 1;
+    else if (isRefund) refundedSales += 1;
+
+    if (method === 'pix') pixCount += 1;
+    else if (method === 'credit_card') cardCount += 1;
+    else if (method === 'billet') billetCount += 1;
+    else otherCount += 1;
+
+    const approvalKey =
+      method === 'pix' || method === 'credit_card' || method === 'billet' ? method : null;
+    if (approvalKey && approvalMap[approvalKey]) {
+      approvalMap[approvalKey].total += 1;
+      if (isApproved) approvalMap[approvalKey].approved += 1;
+    }
+
+    const saleDt = new Date(sale.saleDate);
+    const hour = saleDt.getHours();
+    if (hour >= 0 && hour < 24 && isApproved) hourlyRevenue[hour] += amt;
+
+    const dow = saleDt.getDay();
+    if (dow >= 0 && dow < 7 && isApproved) dayOfWeekCounts[dow] += 1;
+
+    const campaign = String(sale.utmCampaign || '').trim() || 'Sem campanha UTM';
+    productMap.set(campaign, (productMap.get(campaign) || 0) + (isApproved ? 1 : 0));
+
+    const src = String(sale.utmSource || '').trim() || 'Direto / sem UTM';
+    sourceMap.set(src, (sourceMap.get(src) || 0) + (isApproved ? 1 : 0));
+  }
+
+  const revenueByHour = Array.from({ length: 24 }, (_, i) => ({
+    hora: `${String(i).padStart(2, '0')}:00`,
+    valor: Math.round(hourlyRevenue[i] * 100) / 100,
+  }));
+
+  const profitByHour = revenueByHour.map((row) => {
+    const receita = row.valor;
+    const spendShare =
+      totalRevenue > 0 ? (totalSpend * receita) / totalRevenue : totalSpend / 24;
+    const lucro = receita - spendShare;
+    return {
+      hora: row.hora,
+      receita,
+      lucro: Math.round(lucro * 100) / 100,
+    };
+  });
+
+  let receitaAcum = 0;
+  let investimentoAcum = 0;
+  const cumulativeHourly = revenueByHour.map((row) => {
+    receitaAcum += row.valor;
+    const investHour =
+      totalRevenue > 0 ? (totalSpend * row.valor) / totalRevenue : totalSpend / 24;
+    investimentoAcum += investHour;
+    return {
+      hora: row.hora,
+      receitaAcum: Math.round(receitaAcum * 100) / 100,
+      investimentoAcum: Math.round(investimentoAcum * 100) / 100,
+      lucroAcum: Math.round((receitaAcum - investimentoAcum) * 100) / 100,
+    };
+  });
+
+  const salesByProduct = Array.from(productMap.entries())
+    .map(([label, count]) => ({ label, count }))
+    .filter((x) => x.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 12);
+
+  const salesBySource = Array.from(sourceMap.entries())
+    .map(([label, count]) => ({ label, count }))
+    .filter((x) => x.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 12);
+
+  const approvalRates = [
+    {
+      label: 'Pix',
+      ...approvalMap.pix,
+      pct: approvalMap.pix.total
+        ? Math.round((approvalMap.pix.approved / approvalMap.pix.total) * 1000) / 10
+        : 0,
+    },
+    {
+      label: 'Cartão',
+      ...approvalMap.credit_card,
+      pct: approvalMap.credit_card.total
+        ? Math.round((approvalMap.credit_card.approved / approvalMap.credit_card.total) * 1000) / 10
+        : 0,
+    },
+    {
+      label: 'Boleto',
+      ...approvalMap.billet,
+      pct: approvalMap.billet.total
+        ? Math.round((approvalMap.billet.approved / approvalMap.billet.total) * 1000) / 10
+        : 0,
+    },
+  ];
+
+  const overallApprovalPct =
+    sales.length > 0 ? Math.round((approvedSales / sales.length) * 1000) / 10 : 0;
+  const arpu = approvedSales > 0 ? totalRevenue / approvedSales : 0;
+  const profit = totalRevenue - totalSpend;
+  const marginPct = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0;
+  const refundRatePct = sales.length > 0 ? (refundedSales / sales.length) * 100 : 0;
+  const cpa = metaPurchases > 0 ? totalSpend / metaPurchases : 0;
+
+  return {
+    totalRevenue: Math.round(totalRevenue * 100) / 100,
+    totalSales: sales.length,
+    approvedSales,
+    pendingSales,
+    refundedSales,
+    salesByPaymentMethod: [
+      { name: 'Pix', value: pixCount, color: '#1d4ed8' },
+      { name: 'Cartão', value: cardCount, color: '#60a5fa' },
+      { name: 'Boleto', value: billetCount, color: '#fbbf24' },
+      { name: 'Outros', value: otherCount, color: '#4b5563' },
+    ],
+    revenueByHour,
+    profitByHour,
+    cumulativeHourly,
+    revenueByDay: since && until ? buildRevenueByDaySeries(sales, since, until) : [],
+    salesByDayOfWeek: DAY_LABELS_PT.map((label, i) => ({ label, count: dayOfWeekCounts[i] })),
+    salesByProduct,
+    salesBySource,
+    approvalRates,
+    secondaryMetrics: {
+      arpu: Math.round(arpu * 100) / 100,
+      marginPct: Math.round(marginPct * 10) / 10,
+      refundRatePct: Math.round(refundRatePct * 10) / 10,
+      cpa: Math.round(cpa * 100) / 100,
+      overallApprovalPct,
+      pendingSales,
+      refundedSales,
+      totalSales: sales.length,
+      creativeAnalyses,
+    },
+    isDemoData: false,
   };
 }
 
@@ -460,6 +876,7 @@ async function getInsights(
       ad.id AS ad_id,
       ad.name AS ad_name,
       ad.meta_ad_id,
+      ad.vturb_video_id,
       ad.raw_creative_data,
       ma.id AS media_id,
       ma.google_drive_file_id,
@@ -522,6 +939,7 @@ async function getInsights(
       thumbnailUrl,
       driveViewUrl: gdf ? buildDriveViewUrl(gdf) : null,
       metaVideoId: r.media_meta_video_id || null,
+      vturbVideoId: r.vturb_video_id || null,
       analyzedAt: r.analyzed_at,
       aiAnalysis: r.ai_analysis,
       performanceSnapshot: r.performance_snapshot,
@@ -642,6 +1060,7 @@ async function getInsightDetails(organizationId, adId) {
       ad.name AS ad_name,
       ad.meta_ad_id,
       ad.meta_video_id AS ad_meta_video_id,
+      ad.vturb_video_id,
       ad.raw_creative_data,
       ca.id AS creative_analysis_id,
       ca.ai_analysis,
@@ -825,6 +1244,8 @@ async function getInsightDetails(organizationId, adId) {
     },
     media_id: mediaId,
     meta_video_id: metaVideoId,
+    vturb_video_id: r.vturb_video_id || null,
+    vturbVideoId: r.vturb_video_id || null,
     thumbnail_url: thumbnailUrl,
     media_type: mediaType,
     media_url: mediaUrl,
@@ -881,6 +1302,29 @@ async function getAdMetaBreakdowns(organizationId, adId, { breakdown, period = '
   return metaBreakdowns.fetchAdBreakdowns(organizationId, adRow.metaAdId, { breakdown, period });
 }
 
+async function linkVturbVideo(organizationId, adId, vturbVideoId) {
+  const adRow = await db.Ad.findOne({ where: { id: adId, organizationId } });
+  if (!adRow) {
+    const err = new Error('Ad not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const cleanId = vturbVideoId != null ? String(vturbVideoId).trim() : '';
+  await adRow.update({ vturbVideoId: cleanId.length ? cleanId : null });
+
+  await db.CreativeAnalysis.update(
+    { vturbVideoId: cleanId.length ? cleanId : null },
+    { where: { organizationId, adId } },
+  ).catch(() => {});
+
+  return {
+    adId,
+    vturbVideoId: cleanId.length ? cleanId : null,
+    vturb_video_id: cleanId.length ? cleanId : null,
+  };
+}
+
 /**
  * Distribuição de formatos (9:16, 1:1, etc.) dos criativos importados da org.
  */
@@ -905,7 +1349,11 @@ async function getCreativeFormats(organizationId) {
     },
   );
 
-  return creativeFormat.buildFormatsDistribution(rows);
+  return {
+    ...creativeFormat.buildFormatsDistribution(rows),
+    templateLibrary: require('../../Data/creative_format_templates').listCreativeFormatTemplates(),
+    driveFolderUrl: require('../../Data/creative_format_templates').DRIVE_FOLDER_URL,
+  };
 }
 
 module.exports = {
@@ -917,4 +1365,7 @@ module.exports = {
   listImportedCampaigns,
   refreshMediaUrl,
   getCreativeFormats,
+  linkVturbVideo,
+  aggregateExternalSalesStats,
+  emptyExternalSalesPayload,
 };

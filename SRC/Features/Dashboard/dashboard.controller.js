@@ -169,81 +169,29 @@ async function getExternalSalesStats(req, res, next) {
       order: [['sale_date', 'ASC']],
     });
 
-    if (sales.length === 0) {
-      return res.json({
-        totalRevenue: 0.00,
-        totalSales: 0,
-        salesByPaymentMethod: [
-          { name: "Pix", value: 0, color: "#1d4ed8" },
-          { name: "Cartão", value: 0, color: "#60a5fa" },
-          { name: "Boleto", value: 0, color: "#fbbf24" },
-          { name: "Outros", value: 0, color: "#4b5563" }
-        ],
-        profitByHour: Array.from({ length: 24 }, (_, i) => ({
-          hora: `${String(i).padStart(2, '0')}:00`,
-          valor: 0,
-        })),
-        revenueByHour: Array.from({ length: 24 }, (_, i) => ({
-          hora: `${String(i).padStart(2, '0')}:00`,
-          valor: 0,
-        })),
-        isDemoData: false,
-        dateRange: { since, until },
-      });
+    let overviewMeta = { totalSpend: 0, metaPurchases: 0, creativeAnalyses: 0 };
+    try {
+      const overview = await dashboardService.getOverview(organizationId, { period: periodRaw });
+      overviewMeta = {
+        totalSpend: Number(overview.totalSpend || 0),
+        metaPurchases: Number(overview.funnel?.purchases || 0),
+        creativeAnalyses: Number(overview.creativeAnalysesCount || 0),
+      };
+    } catch (_overviewErr) {
+      /* overview opcional para enriquecer CPA/lucro horário */
     }
 
-    let totalRevenue = 0;
-    let totalSales = sales.length;
+    if (sales.length === 0) {
+      return res.json(dashboardService.emptyExternalSalesPayload(since, until));
+    }
 
-    let pixCount = 0;
-    let cardCount = 0;
-    let billetCount = 0;
-    let otherCount = 0;
-
-    const hourlyRevenue = Array.from({ length: 24 }, () => 0);
-
-    sales.forEach((sale) => {
-      const amt = parseFloat(sale.amount || 0);
-      const statusClean = String(sale.status || '').toLowerCase();
-
-      if (['paid', 'approved', 'succeeded', 'pago', 'completed'].includes(statusClean)) {
-        totalRevenue += amt;
-      }
-
-      const method = String(sale.paymentMethod || '').toLowerCase();
-      if (method === 'pix') pixCount++;
-      else if (method === 'credit_card') cardCount++;
-      else if (method === 'billet') billetCount++;
-      else otherCount++;
-
-      const hour = new Date(sale.saleDate).getHours();
-      if (hour >= 0 && hour < 24) {
-        hourlyRevenue[hour] += amt;
-      }
+    const aggregated = dashboardService.aggregateExternalSalesStats(sales, {
+      ...overviewMeta,
+      since,
+      until,
     });
-
-    const salesByPaymentMethod = [
-      { name: 'Pix', value: pixCount, color: '#1d4ed8' },
-      { name: 'Cartão', value: cardCount, color: '#60a5fa' },
-      { name: 'Boleto', value: billetCount, color: '#fbbf24' },
-      { name: 'Outros', value: otherCount, color: '#4b5563' },
-    ];
-
-    const revenueByHour = Array.from({ length: 24 }, (_, i) => {
-      const hourLabel = `${String(i).padStart(2, '0')}:00`;
-      return {
-        hora: hourLabel,
-        valor: Math.round(hourlyRevenue[i] * 100) / 100,
-      };
-    });
-
     return res.json({
-      totalRevenue,
-      totalSales,
-      salesByPaymentMethod,
-      revenueByHour,
-      profitByHour: revenueByHour,
-      isDemoData: false,
+      ...aggregated,
       dateRange: { since, until },
     });
   } catch (error) {
@@ -289,6 +237,30 @@ async function adMediaPlayback(req, res, next) {
   }
 }
 
+async function linkVturbVideo(req, res, next) {
+  try {
+    const organizationId = resolveOrganizationId(req);
+    ensureMembershipMatches(req, organizationId);
+    assertUuid(req.params.adId, 'ad_id');
+
+    const vturbVideoId =
+      req.body?.vturbVideoId != null
+        ? req.body.vturbVideoId
+        : req.body?.vturb_video_id != null
+          ? req.body.vturb_video_id
+          : '';
+
+    const data = await dashboardService.linkVturbVideo(
+      organizationId,
+      req.params.adId,
+      vturbVideoId,
+    );
+    res.json(data);
+  } catch (e) {
+    next(e);
+  }
+}
+
 module.exports = {
   overview,
   insights,
@@ -299,4 +271,5 @@ module.exports = {
   getExternalSalesStats,
   refreshMedia,
   creativeFormats,
+  linkVturbVideo,
 };

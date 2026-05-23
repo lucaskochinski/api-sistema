@@ -11,6 +11,7 @@ router.use(authMiddleware);
 router.get('/overview', dashboardController.overview);
 router.get('/insights', dashboardController.insights);
 router.get('/insights/:adId', dashboardController.insightDetails);
+router.patch('/insights/:adId/vturb', dashboardController.linkVturbVideo);
 router.get('/insights/:adId/media-playback', dashboardController.adMediaPlayback);
 router.get('/insights/:adId/meta-breakdowns', dashboardController.adMetaBreakdowns);
 router.get('/imported-campaigns', dashboardController.importedCampaigns);
