@@ -44,6 +44,16 @@ const INSIGHT_FIELDS = [
   'video_play_retention_20_to_60s_actions',
   'canvas_avg_view_percent',
   'canvas_avg_view_time',
+  'auction_bid',
+  'auction_competitiveness',
+  'auction_max_competitor_bid',
+  'catalog_segment_actions',
+  'catalog_segment_value',
+  'converted_product_quantity',
+  'converted_product_value',
+  'converted_product_omni_purchase',
+  'conversions',
+  'conversion_values',
 ].join(',');
 
 const PURCHASE_ACTION_TYPES = [

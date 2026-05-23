@@ -434,6 +434,29 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
       ctr: d.impressions > 0 ? Math.round((d.clicks / d.impressions) * 10000) / 100 : 0,
     }));
 
+  const metaExtended = await metaMarketingFull
+    .buildDashboardMetaExtended(organizationId, {
+      since,
+      until,
+      period: resolvedPeriod,
+    })
+    .catch((err) => ({
+      available: false,
+      reason: 'meta_extended_fetch_failed',
+      warning: err?.message || String(err),
+      period: resolvedPeriod,
+      dateRange: { since, until },
+    }));
+
+  const trafficSources =
+    metaExtended?.metaTrafficSources?.length
+      ? metaExtended.metaTrafficSources
+      : [
+          { label: 'Cliques (ads importados)', count: aggregated.delivery.clicks || 0 },
+          { label: 'Compras atrib. Meta', count: aggregated.funnel.purchases || 0 },
+          { label: 'Initiate Checkout', count: aggregated.funnel.initiateCheckouts || 0 },
+        ].filter((row) => row.count > 0);
+
   return {
     period: resolvedPeriod,
     dateRange: { since, until },
@@ -485,12 +508,8 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
         : 'Sem dados',
     },
     rankingItems,
-    /** Proxy até termos breakdown publisher_platform persistido — cliques/compras Meta agregados. */
-    metaTrafficSources: [
-      { label: 'Cliques (ads importados)', count: aggregated.delivery.clicks || 0 },
-      { label: 'Compras atrib. Meta', count: aggregated.funnel.purchases || 0 },
-      { label: 'Initiate Checkout', count: aggregated.funnel.initiateCheckouts || 0 },
-    ].filter((row) => row.count > 0),
+    metaTrafficSources: trafficSources,
+    metaExtended,
   };
 }
 
