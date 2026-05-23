@@ -4,19 +4,33 @@ const metaService = require('../Features/Meta/meta.service');
 const graph = require('./meta_graph.client');
 const metaMetrics = require('./meta_insights_metrics.service');
 
+/** Campos compatíveis com breakdowns de placement (sem video_* — exigem action_type). */
 const BREAKDOWN_FIELDS = [
   'impressions',
   'reach',
   'clicks',
   'spend',
   'ctr',
+  'cpc',
+  'cpm',
+  'inline_link_clicks',
   'actions',
   'action_values',
-  'video_play_actions',
-  'video_continuous_2_sec_watched_actions',
-  'video_p75_watched_actions',
-  'video_15_sec_watched_actions',
+  'purchase_roas',
 ].join(',');
+
+const BREAKDOWN_FIELDS_MINIMAL = [
+  'impressions',
+  'reach',
+  'clicks',
+  'spend',
+  'ctr',
+].join(',');
+
+function isInvalidBreakdownComboError(err) {
+  const msg = String(err?.message || err?.metaFb?.message || '').toLowerCase();
+  return msg.includes('breakdown') && (msg.includes('invalid') || msg.includes('(#100)'));
+}
 
 function parseBreakdownRow(row, breakdownKey) {
   const dim =
@@ -43,6 +57,15 @@ function parseBreakdownRow(row, breakdownKey) {
   };
 }
 
+async function fetchInsightsBreakdownRows(accessToken, metaAdId, { breakdownKey, timeRange, fields }) {
+  return graph.iterateAllEdges(accessToken, `${metaAdId}/insights`, {
+    fields,
+    breakdowns: breakdownKey,
+    time_range: timeRange,
+    limit: 100,
+  });
+}
+
 async function fetchAdBreakdowns(organizationId, metaAdId, { breakdown, period = '30d' } = {}) {
   const breakdownKey = String(breakdown || '').trim();
   if (!metaMetrics.ALLOWED_BREAKDOWNS.includes(breakdownKey)) {
@@ -55,12 +78,24 @@ async function fetchAdBreakdowns(organizationId, metaAdId, { breakdown, period =
   const { accessToken } = await metaService.getValidToken(organizationId);
 
   const timeRange = JSON.stringify({ since, until });
-  const rows = await graph.iterateAllEdges(accessToken, `${metaAdId}/insights`, {
-    fields: BREAKDOWN_FIELDS,
-    breakdowns: breakdownKey,
-    time_range: timeRange,
-    limit: 100,
-  });
+  let rows;
+  let warning = null;
+
+  try {
+    rows = await fetchInsightsBreakdownRows(accessToken, metaAdId, {
+      breakdownKey,
+      timeRange,
+      fields: BREAKDOWN_FIELDS,
+    });
+  } catch (err) {
+    if (!isInvalidBreakdownComboError(err)) throw err;
+    warning = err.message || 'meta_breakdown_fields_fallback';
+    rows = await fetchInsightsBreakdownRows(accessToken, metaAdId, {
+      breakdownKey,
+      timeRange,
+      fields: BREAKDOWN_FIELDS_MINIMAL,
+    });
+  }
 
   const byDim = new Map();
   for (const row of rows) {
@@ -93,6 +128,7 @@ async function fetchAdBreakdowns(organizationId, metaAdId, { breakdown, period =
     breakdown: breakdownKey,
     dateRange: { since, until },
     items,
+    warning,
   };
 }
 
