@@ -3,9 +3,9 @@
 const fs = require('fs');
 const path = require('path');
 const { Sequelize } = require('sequelize');
-const Umzug = require('umzug');
 
 const MIGRATIONS_DIR = path.join(__dirname, '..', 'migrations');
+const META_TABLE = 'SequelizeMeta';
 
 /** Se o schema já reflecte a migração (BD criada via sync), marca como aplicada sem re-executar. */
 const ALREADY_APPLIED = {
@@ -52,28 +52,26 @@ async function columnExists(sequelize, table, column) {
 }
 
 async function roleKeyExists(sequelize, key) {
-  const [rows] = await sequelize.query(
-    `SELECT 1 FROM roles WHERE key = :key LIMIT 1`,
-    { replacements: { key } },
-  );
+  const [rows] = await sequelize.query(`SELECT 1 FROM roles WHERE key = :key LIMIT 1`, {
+    replacements: { key },
+  });
   return rows.length > 0;
 }
 
 function listMigrationFiles() {
   return fs
     .readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith('.js'))
+    .filter((f) => /^\d+[\w-]+\.js$/.test(f))
     .sort();
 }
 
 async function ensureSequelizeMetaTable(sequelize) {
   await sequelize
     .getQueryInterface()
-    .createTable('SequelizeMeta', {
+    .createTable(META_TABLE, {
       name: {
         type: Sequelize.STRING,
         allowNull: false,
-        unique: true,
         primaryKey: true,
       },
     })
@@ -82,95 +80,87 @@ async function ensureSequelizeMetaTable(sequelize) {
 
 async function getExecutedMigrationNames(sequelize) {
   await ensureSequelizeMetaTable(sequelize);
-  try {
-    const [rows] = await sequelize.query('SELECT name FROM "SequelizeMeta" ORDER BY name');
-    return rows.map((r) => r.name);
-  } catch {
-    return [];
-  }
+  const [rows] = await sequelize.query(`SELECT name FROM "${META_TABLE}" ORDER BY name`);
+  return rows.map((r) => r.name);
 }
 
 async function recordMigrationName(sequelize, name) {
   await ensureSequelizeMetaTable(sequelize);
   await sequelize.query(
-    'INSERT INTO "SequelizeMeta" (name) VALUES (:name) ON CONFLICT (name) DO NOTHING',
+    `INSERT INTO "${META_TABLE}" (name) VALUES (:name) ON CONFLICT (name) DO NOTHING`,
     { replacements: { name } },
   );
 }
 
-/**
- * BD legada (sequelize.sync): regista migrações cujo schema já existe, evitando "already exists".
- */
-async function baselineLegacySchemaIfNeeded(sequelize) {
-  const hasLegacySchema = await tableExists(sequelize, 'organizations');
-  if (!hasLegacySchema) {
-    return { baselined: 0 };
+async function runMigrationFile(sequelize, file) {
+  const migrationPath = path.join(MIGRATIONS_DIR, file);
+  delete require.cache[require.resolve(migrationPath)];
+  const mod = require(migrationPath);
+  const up = typeof mod.up === 'function' ? mod.up : mod.default?.up;
+  if (typeof up !== 'function') {
+    throw new Error(`migration_missing_up:${file}`);
   }
-
-  const executed = new Set(await getExecutedMigrationNames(sequelize));
-  const files = listMigrationFiles();
-  let baselined = 0;
-
-  for (const file of files) {
-    if (executed.has(file)) continue;
-
-    const checker = ALREADY_APPLIED[file];
-    if (!checker) {
-      console.warn(`[migrations] sem baseline para ${file} — será executada normalmente`);
-      break;
-    }
-
-    const alreadyThere = await checker(sequelize);
-    if (!alreadyThere) {
-      console.info(`[migrations] pendente real detectada: ${file}`);
-      break;
-    }
-
-    await recordMigrationName(sequelize, file);
-    executed.add(file);
-    baselined += 1;
-    console.info(`[migrations] baseline (schema já presente): ${file}`);
-  }
-
-  return { baselined };
+  await up(sequelize.getQueryInterface(), Sequelize);
 }
 
 /**
- * Aplica migrações Sequelize pendentes (idempotente + baseline para BD sync).
+ * Baseline + aplicação directa (sem Umzug — evita tabela meta divergente SequelizeMeta vs SequelizeMetas).
  * @param {import('sequelize').Sequelize} sequelize
  */
 async function runPendingMigrations(sequelize) {
   if (String(process.env.RUN_MIGRATIONS_ON_BOOT || 'true').toLowerCase() === 'false') {
     console.info('[migrations] ignorado (RUN_MIGRATIONS_ON_BOOT=false)');
-    return { applied: 0, skipped: true };
+    return { applied: 0, baselined: 0, skipped: true };
   }
 
-  const umzug = new Umzug({
-    migrations: {
-      path: MIGRATIONS_DIR,
-      params: [sequelize.getQueryInterface(), Sequelize],
-    },
-    storage: 'sequelize',
-    storageOptions: { sequelize },
-    logging: (msg) => console.info(`[migrations] ${msg}`),
-  });
+  await ensureSequelizeMetaTable(sequelize);
+  const executedSet = new Set(await getExecutedMigrationNames(sequelize));
+  const files = listMigrationFiles();
+  let baselined = 0;
+  let applied = 0;
 
-  const baseline = await baselineLegacySchemaIfNeeded(sequelize);
-  if (baseline.baselined > 0) {
-    console.info(`[migrations] ${baseline.baselined} migração(ões) registada(s) via baseline`);
+  for (const file of files) {
+    if (executedSet.has(file)) continue;
+
+    const checker = ALREADY_APPLIED[file];
+    if (!checker) {
+      console.warn(`[migrations] sem baseline para ${file}`);
+      break;
+    }
+
+    if (!(await checker(sequelize))) {
+      console.info(`[migrations] pendente real: ${file}`);
+      break;
+    }
+
+    await recordMigrationName(sequelize, file);
+    executedSet.add(file);
+    baselined += 1;
+    console.info(`[migrations] baseline (schema já presente): ${file}`);
   }
 
-  const pending = await umzug.pending();
-  if (!pending.length) {
+  if (baselined > 0) {
+    console.info(`[migrations] ${baselined} migração(ões) registada(s) via baseline`);
+  }
+
+  for (const file of files) {
+    if (executedSet.has(file)) continue;
+
+    console.info(`[migrations] aplicando: ${file}`);
+    await runMigrationFile(sequelize, file);
+    await recordMigrationName(sequelize, file);
+    executedSet.add(file);
+    applied += 1;
+    console.info(`[migrations] concluída: ${file}`);
+  }
+
+  if (applied === 0 && baselined === 0) {
     console.info('[migrations] schema actualizado — nenhuma pendente');
-    return { applied: 0, baselined: baseline.baselined };
+  } else if (applied > 0) {
+    console.info(`[migrations] ${applied} migração(ões) aplicada(s) com sucesso`);
   }
 
-  const names = pending.map((m) => m.file || m.name || m);
-  console.info(`[migrations] aplicando ${pending.length} migração(ões):`, names.join(', '));
-  const executed = await umzug.up();
-  console.info(`[migrations] ${executed.length} migração(ões) aplicada(s) com sucesso`);
-  return { applied: executed.length, baselined: baseline.baselined };
+  return { applied, baselined };
 }
 
-module.exports = { runPendingMigrations, baselineLegacySchemaIfNeeded };
+module.exports = { runPendingMigrations };
