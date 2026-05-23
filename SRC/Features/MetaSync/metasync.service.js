@@ -571,19 +571,28 @@ async function syncDailyPerformanceInternal(organizationId, adPkUuid, since, unt
     throw err;
   }
 
-  const { accessToken } = await metaService.getValidToken(organizationId, { preferOrgToken: true });
+  const { accessToken } = await metaService.getValidToken(organizationId);
 
   const timeRange = JSON.stringify({ since, until });
-  const rows = await graph.iterateAllEdges(
-    accessToken,
-    `${adRow.metaAdId}/insights`,
-    {
+  const params = {
+    time_increment: 1,
+    time_range: timeRange,
+    limit: GRAPH_PAGE_LIMIT,
+  };
+
+  let rows = [];
+  try {
+    rows = await graph.iterateAllEdges(accessToken, `${adRow.metaAdId}/insights`, {
+      ...params,
       fields: INSIGHT_FIELDS,
-      time_increment: 1,
-      time_range: timeRange,
-      limit: GRAPH_PAGE_LIMIT,
-    },
-  );
+    });
+  } catch (syncErr) {
+    console.warn('[metasync] insights full fields failed, retry minimal', syncErr.message);
+    rows = await graph.iterateAllEdges(accessToken, `${adRow.metaAdId}/insights`, {
+      ...params,
+      fields: 'date_start,date_stop,impressions,reach,clicks,spend,ctr,actions,action_values',
+    });
+  }
 
   let daysWritten = 0;
   for (const raw of rows) {
@@ -599,7 +608,7 @@ async function syncDailyPerformanceInternal(organizationId, adPkUuid, since, unt
  * Persiste/atualiza registros em `meta_ad_accounts` para reutilização nas rotas de import.
  */
 async function listAdAccounts(organizationId) {
-  const { accessToken } = await metaService.getValidToken(organizationId, { preferOrgToken: true });
+  const { accessToken } = await metaService.getValidToken(organizationId);
   const rows = await graph.iterateAllEdges(accessToken, 'me/adaccounts', {
     fields: 'id,name,account_status',
     limit: GRAPH_PAGE_LIMIT,
@@ -642,7 +651,7 @@ async function listAdAccounts(organizationId) {
  */
 async function listLiveCampaigns(organizationId, metaActIdFromRoute) {
   const metaAccount = await resolveMetaAccountForOrg(organizationId, metaActIdFromRoute);
-  const { accessToken } = await metaService.getValidToken(organizationId, { preferOrgToken: true });
+  const { accessToken } = await metaService.getValidToken(organizationId);
   const act = actGraphPrefix(metaActIdFromRoute);
   const items = await graph.iterateAllEdges(accessToken, `${act}/campaigns`, {
     fields: LIVE_CAM_FIELDS,
@@ -682,7 +691,7 @@ async function listLiveAdsByCampaign(
   metaCampaignGraphId,
 ) {
   const metaAccount = await resolveMetaAccountForOrg(organizationId, metaActIdFromRoute);
-  const { accessToken } = await metaService.getValidToken(organizationId, { preferOrgToken: true });
+  const { accessToken } = await metaService.getValidToken(organizationId);
   const digits = stripActPrefix(metaAccount.metaActId);
 
   /** @type {object} */
@@ -910,7 +919,7 @@ async function importAndAnalyzeAd({
     organizationId,
     metaActIdFromRoute,
   );
-  const { accessToken } = await metaService.getValidToken(organizationId, { preferOrgToken: true });
+  const { accessToken } = await metaService.getValidToken(organizationId);
 
   const metaNorm = String(metaAdGraphId).trim();
   const existingAd = await db.Ad.findOne({

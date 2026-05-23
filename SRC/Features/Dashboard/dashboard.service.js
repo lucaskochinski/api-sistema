@@ -66,7 +66,7 @@ function applyPlaybackToMedia(playback, { isVideoAd, thumbnailUrl }) {
 
   return {
     mediaUrl: playback.thumbnailUrl || thumbnailUrl,
-    mediaType: isVideoAd ? 'video' : 'image',
+    mediaType: isVideoAd && playback.type === 'embed' ? 'embed' : isVideoAd ? 'video' : 'image',
     embedUrl: playback.embedUrl || null,
     thumbnailUrl: playback.thumbnailUrl || thumbnailUrl,
     playbackUnavailable: Boolean(playback.unavailable),
@@ -753,6 +753,10 @@ async function getInsightDetails(organizationId, adId) {
     video_play_curve: metaAggregated.videoPlayCurve,
     creative_health: metaAggregated.creativeHealth,
     ai_analysis: r.ai_analysis || null,
+    delivery_note:
+      performance_daily.length > 0
+        ? null
+        : 'Este anúncio não teve entrega (impressões/gasto) no período sincronizado na Meta.',
   };
 }
 

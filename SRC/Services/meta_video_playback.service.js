@@ -97,7 +97,7 @@ async function fetchFromAdAccountVideos(accessToken, metaAdGraphId, videoId) {
 }
 
 async function fetchMetaVideoPlayback(organizationId, { metaVideoId, metaAdGraphId, rawCreative } = {}) {
-  const { accessToken } = await metaService.getValidToken(organizationId, { preferOrgToken: true });
+  const { accessToken } = await metaService.getValidToken(organizationId);
 
   const candidateIds = uniqueIds([
     metaVideoId,
@@ -164,7 +164,7 @@ async function fetchMetaVideoPlayback(organizationId, { metaVideoId, metaAdGraph
       embedUrl: instagramPermalink,
       thumbnailUrl: thumb,
       unavailable: true,
-      reason: 'video_source_requires_org_token_or_instagram_embed',
+      reason: 'video_source_instagram_only',
       strategy: 'instagram_permalink',
     };
   }

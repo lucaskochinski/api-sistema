@@ -95,7 +95,7 @@ async function fetchAdBreakdowns(organizationId, metaAdId, { breakdown, period =
   }
 
   const { since, until } = metaMetrics.resolvePeriodDates(period);
-  const { accessToken } = await metaService.getValidToken(organizationId, { preferOrgToken: true });
+  const { accessToken } = await metaService.getValidToken(organizationId);
   const timeRange = JSON.stringify({ since, until });
 
   const attempts = buildBreakdownAttempts(breakdownKey);

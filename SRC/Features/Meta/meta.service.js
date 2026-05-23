@@ -217,27 +217,15 @@ async function persistRefreshedToken(organizationId, newAccessPlain, row) {
 }
 
 /**
- * Único ponto que devolve o access token Meta em plaintext para jobs internos.
+ * Token Meta para jobs internos.
+ * Prioridade: META_SYSTEM_ACCESS_TOKEN (admin) → OAuth da org (se existir).
  * @param {string} organizationId
- * @param {{ preferOrgToken?: boolean }} [options] — true = token OAuth da org (necessário p/ vídeos/insights do cliente)
+ * @param {{ forceOrgToken?: boolean }} [options] — força OAuth da org mesmo com system token
  */
 async function getValidAccessTokenForOrganization(organizationId, options = {}) {
-  const preferOrgToken = Boolean(options?.preferOrgToken);
+  const forceOrgToken = Boolean(options?.forceOrgToken);
 
-  if (preferOrgToken) {
-    try {
-      return await loadOrganizationOAuthToken(organizationId);
-    } catch (err) {
-      if (!process.env.META_SYSTEM_ACCESS_TOKEN) throw err;
-      console.warn(
-        '[meta] preferOrgToken failed; falling back to META_SYSTEM_ACCESS_TOKEN',
-        err.message,
-      );
-    }
-  }
-
-  if (process.env.META_SYSTEM_ACCESS_TOKEN) {
-    console.info('[meta] USING ADMIN BYPASS META_SYSTEM_ACCESS_TOKEN FROM ENV');
+  if (process.env.META_SYSTEM_ACCESS_TOKEN && !forceOrgToken) {
     return {
       accessToken: process.env.META_SYSTEM_ACCESS_TOKEN,
       expiresAt: null,
