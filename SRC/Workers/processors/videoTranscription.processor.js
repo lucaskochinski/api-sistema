@@ -201,6 +201,9 @@ module.exports = async function videoTranscriptionProcessor(job) {
     llmModel: insights.modelUsed,
     analyzedPipeline: 'bullmq_deepgram_gemini_holistic_v1',
   };
+  aiAnalysisPayload.ui = require('../../Services/ai_creative_ui.service').buildAiCreativeUi(
+    aiAnalysisPayload,
+  );
 
   await db.CreativeAnalysis.create({
     organizationId,

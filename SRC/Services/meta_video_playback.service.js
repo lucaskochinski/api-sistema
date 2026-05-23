@@ -3,6 +3,7 @@
 const graph = require('./meta_graph.client');
 const metaService = require('../Features/Meta/meta.service');
 const metaCreativeParser = require('../Features/MetaSync/meta_ad_creative_parser');
+const metaThumbnail = require('./meta_thumbnail.service');
 
 const AD_CREATIVE_VIDEO_FIELDS =
   'creative{id,video_id,object_type,thumbnail_url,image_url,instagram_permalink_url,object_story_spec{video_data{video_id,image_url}},asset_feed_spec{videos{video_id}}}';
@@ -41,15 +42,17 @@ async function fetchVideoSourceById(accessToken, videoId) {
   if (!videoId) return null;
 
   const vhead = await graph.fbGet(accessToken, String(videoId), {
-    fields: 'id,source,picture,permalink_url,embed_html,format',
+    fields: 'id,source,picture,permalink_url,embed_html,format,thumbnails',
   });
   if (graphPayloadHasError(vhead)) return null;
+
+  const hdThumb = metaThumbnail.resolveVideoNodeThumbnail(vhead);
 
   if (vhead?.source) {
     return {
       type: 'video',
       url: vhead.source,
-      thumbnailUrl: vhead.picture || null,
+      thumbnailUrl: hdThumb,
       videoId: String(videoId),
       strategy: 'video_node_source',
     };
@@ -85,7 +88,7 @@ async function fetchFromAdAccountVideos(accessToken, metaAdGraphId, videoId) {
     return {
       type: 'video',
       url: match.source,
-      thumbnailUrl: match.picture || null,
+      thumbnailUrl: match.picture ? String(match.picture) : null,
       videoId: String(match.id || videoId),
       strategy: 'act_advideos',
     };
@@ -133,7 +136,7 @@ async function fetchMetaVideoPlayback(organizationId, { metaVideoId, metaAdGraph
         if (fromAct) return fromAct;
       }
 
-      const thumbnailUrl = creative?.thumbnail_url || creative?.image_url || null;
+      const thumbnailUrl = metaThumbnail.pickThumbnailFromCreative(creative);
       const isVideoCreative =
         String(creative?.object_type || '').toUpperCase() === 'VIDEO' ||
         Boolean(creativeVideoId) ||
@@ -150,12 +153,7 @@ async function fetchMetaVideoPlayback(organizationId, { metaVideoId, metaAdGraph
     }
   }
 
-  const thumb =
-    creative?.thumbnail_url ||
-    creative?.image_url ||
-    rawCreative?.thumbnail_url ||
-    rawCreative?.image_url ||
-    null;
+  const thumb = metaThumbnail.pickThumbnailFromCreative(creative || rawCreative);
 
   if (instagramPermalink) {
     return {

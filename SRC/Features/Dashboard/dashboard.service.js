@@ -7,6 +7,10 @@ const metaMetrics = require('../../Services/meta_insights_metrics.service');
 const metaBreakdowns = require('../../Services/meta_insights_breakdown.service');
 const metaVideoPlayback = require('../../Services/meta_video_playback.service');
 const metaMarketingFull = require('../../Services/meta_marketing_full.service');
+const aiCreativeUi = require('../../Services/ai_creative_ui.service');
+const metaThumbnail = require('../../Services/meta_thumbnail.service');
+const metaService = require('../Meta/meta.service');
+const graph = require('../../Services/meta_graph.client');
 
 function clampInt(value, fallback, max) {
   const n = Number.parseInt(value, 10);
@@ -27,15 +31,85 @@ function buildDriveViewUrl(googleDriveFileId) {
 }
 
 function pickThumbnailFromRawCreative(rawCreative) {
-  const c = rawCreative && typeof rawCreative === 'object' ? rawCreative : {};
-  if (c.thumbnail_url) return String(c.thumbnail_url);
-  if (c.image_url) return String(c.image_url);
-  const spec = c.object_story_spec;
-  if (spec && typeof spec === 'object') {
-    if (spec.link_data?.picture) return String(spec.link_data.picture);
-    if (spec.video_data?.image_url) return String(spec.video_data.image_url);
-  }
-  return null;
+  return metaThumbnail.pickThumbnailFromCreative(rawCreative);
+}
+
+async function enrichThumbnailUrlsForRows(organizationId, rows) {
+  if (!Array.isArray(rows) || !rows.length) return rows;
+
+  let accessToken = null;
+  /** @type {Map<string, string>} */
+  const videoThumbCache = new Map();
+
+  const resolveForRow = async (row) => {
+    const gdf = row.google_drive_file_id ? String(row.google_drive_file_id).trim() : '';
+    if (gdf) return buildDriveThumbnailUrl(gdf);
+
+    const ingestMeta =
+      row.ingest_metadata && typeof row.ingest_metadata === 'object'
+        ? row.ingest_metadata
+        : {};
+    const rawCreative =
+      row.raw_creative_data && typeof row.raw_creative_data === 'object'
+        ? row.raw_creative_data
+        : {};
+
+    const storedThumb = ingestMeta.thumbnailUrl
+      ? String(ingestMeta.thumbnailUrl)
+      : null;
+    const creativeThumb = pickThumbnailFromRawCreative(rawCreative);
+    let thumbnailUrl = storedThumb || creativeThumb || null;
+
+    const metaVideoId =
+      row.media_meta_video_id ||
+      row.meta_video_id ||
+      metaThumbnail.extractVideoIdFromCreative(rawCreative);
+
+    const needsUpgrade =
+      metaVideoId &&
+      (!thumbnailUrl || metaThumbnail.looksLikeLowResMetaThumb(thumbnailUrl));
+
+    if (!needsUpgrade) {
+      if (
+        creativeThumb &&
+        metaThumbnail.shouldUpgradeStoredThumbnail(thumbnailUrl, creativeThumb)
+      ) {
+        thumbnailUrl = creativeThumb;
+      }
+      return thumbnailUrl;
+    }
+
+    if (!accessToken) {
+      try {
+        const tokenRow = await metaService.getValidToken(organizationId);
+        accessToken = tokenRow?.accessToken || null;
+      } catch (_) {
+        accessToken = null;
+      }
+    }
+    if (!accessToken) return thumbnailUrl;
+
+    const cacheKey = String(metaVideoId);
+    if (videoThumbCache.has(cacheKey)) {
+      const cached = videoThumbCache.get(cacheKey);
+      return metaThumbnail.pickBestUrlByResolution(
+        [thumbnailUrl, cached].filter(Boolean),
+      );
+    }
+
+    const fromVideo = await metaThumbnail.fetchVideoThumbnailUrl(
+      accessToken,
+      cacheKey,
+      graph,
+    );
+    if (fromVideo) videoThumbCache.set(cacheKey, fromVideo);
+
+    return metaThumbnail.pickBestUrlByResolution(
+      [thumbnailUrl, creativeThumb, fromVideo].filter(Boolean),
+    );
+  };
+
+  return Promise.all(rows.map(resolveForRow));
 }
 
 function applyPlaybackToMedia(playback, { isVideoAd, thumbnailUrl }) {
@@ -968,11 +1042,23 @@ async function getInsights(
     const rawCreative =
       r.raw_creative_data && typeof r.raw_creative_data === 'object' ? r.raw_creative_data : {};
 
-    const thumbnailUrl = gdf
-      ? buildDriveThumbnailUrl(gdf)
-      : ingestMeta.thumbnailUrl ||
-        pickThumbnailFromRawCreative(rawCreative) ||
-        null;
+    return {
+      _row: r,
+      gdf,
+      ingestMeta,
+      rawCreative,
+    };
+  });
+
+  const thumbnailUrls = await enrichThumbnailUrlsForRows(
+    organizationId,
+    rows,
+  );
+
+  const mappedItems = items.map((entry, index) => {
+    const r = entry._row;
+    const gdf = entry.gdf;
+    const thumbnailUrl = thumbnailUrls[index] || null;
 
     return {
       creativeAnalysisId: r.creative_analysis_id,
@@ -989,6 +1075,7 @@ async function getInsights(
       vturbVideoId: r.vturb_video_id || null,
       analyzedAt: r.analyzed_at,
       aiAnalysis: r.ai_analysis,
+      aiUi: aiCreativeUi.buildAiCreativeUi(r.ai_analysis),
       performanceSnapshot: r.performance_snapshot,
       rollup: {
         spend: r.rollup_spend != null ? String(r.rollup_spend) : '0',
@@ -1001,7 +1088,7 @@ async function getInsights(
   });
 
   return {
-    items,
+    items: mappedItems,
     pagination: {
       page: pg,
       limit: lim,
@@ -1072,22 +1159,39 @@ async function refreshMediaUrl(organizationId, mediaId, options = {}) {
     rawCreative: adContext.rawCreative,
   });
 
-  if (playback.url && playback.type === 'video') {
+  const resolvedThumb = metaThumbnail.pickBestUrlByResolution([
+    playback.thumbnailUrl,
+    media.ingestMetadata?.thumbnailUrl,
+    metaThumbnail.pickThumbnailFromCreative(adContext.rawCreative),
+  ].filter(Boolean));
+
+  const shouldPersistThumb = metaThumbnail.shouldUpgradeStoredThumbnail(
+    media.ingestMetadata?.thumbnailUrl,
+    resolvedThumb,
+  );
+
+  if ((playback.url && playback.type === 'video') || shouldPersistThumb) {
     const nextMeta = {
       ...(media.ingestMetadata && typeof media.ingestMetadata === 'object'
         ? media.ingestMetadata
         : {}),
-      thumbnailUrl: playback.thumbnailUrl || media.ingestMetadata?.thumbnailUrl || null,
+      thumbnailUrl: resolvedThumb || media.ingestMetadata?.thumbnailUrl || null,
       lastRefreshedAt: new Date().toISOString(),
       lastPlaybackStrategy: playback.strategy || null,
     };
     if (metaAdGraphId) nextMeta.metaAdGraphId = metaAdGraphId;
     await media.update({ ingestMetadata: nextMeta });
 
-    const resolvedVideoId = metaVideoPlayback.extractVideoIdFromRawCreative(adContext.rawCreative);
-    if (resolvedVideoId && resolvedVideoId !== media.metaVideoId) {
-      await media.update({ metaVideoId: resolvedVideoId }).catch(() => {});
+    if (playback.url && playback.type === 'video') {
+      const resolvedVideoId = metaVideoPlayback.extractVideoIdFromRawCreative(adContext.rawCreative);
+      if (resolvedVideoId && resolvedVideoId !== media.metaVideoId) {
+        await media.update({ metaVideoId: resolvedVideoId }).catch(() => {});
+      }
     }
+  }
+
+  if (resolvedThumb) {
+    playback.thumbnailUrl = resolvedThumb;
   }
 
   return playback;
@@ -1244,7 +1348,7 @@ async function getInsightDetails(organizationId, adId) {
   } else if (ingestMeta.thumbnailUrl) {
     thumbnailUrl = ingestMeta.thumbnailUrl;
   } else if (rawCreative.thumbnail_url || rawCreative.image_url) {
-    thumbnailUrl = rawCreative.thumbnail_url || rawCreative.image_url;
+    thumbnailUrl = metaThumbnail.pickThumbnailFromCreative(rawCreative);
   }
 
   let mediaUrl = null;
@@ -1273,6 +1377,20 @@ async function getInsightDetails(organizationId, adId) {
       mediaUrl = null;
       mediaType = isVideoAd ? 'video' : 'image';
       embedUrl = rawCreative.instagram_permalink_url || null;
+    }
+
+    if (metaVideoId && metaThumbnail.looksLikeLowResMetaThumb(thumbnailUrl)) {
+      try {
+        const { accessToken } = await metaService.getValidToken(organizationId);
+        const hdThumb = await metaThumbnail.resolveMetaThumbnailUrl(accessToken, {
+          creative: rawCreative,
+          videoId: metaVideoId,
+          graphClient: graph,
+        });
+        if (hdThumb) thumbnailUrl = hdThumb;
+      } catch (_) {
+        /** best-effort */
+      }
     }
   }
 
@@ -1306,6 +1424,9 @@ async function getInsightDetails(organizationId, adId) {
     video_play_curve: metaAggregated.videoPlayCurve,
     creative_health: metaAggregated.creativeHealth,
     ai_analysis: r.ai_analysis || null,
+    ai_ui: aiCreativeUi.buildAiCreativeUi(r.ai_analysis || null, {
+      videoMetrics: metaAggregated.video,
+    }),
     delivery_note:
       performance_daily.length > 0
         ? null

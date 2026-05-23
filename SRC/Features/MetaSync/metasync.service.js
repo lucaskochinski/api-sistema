@@ -9,6 +9,7 @@ const planLimits = require('../../Services/plan_limits.service');
 const transcriptionUsage = require('../../Services/transcription_usage.service');
 const metaCreativeParser = require('./meta_ad_creative_parser');
 const creativeFormat = require('../../Services/creative_format.service');
+const metaThumbnail = require('../../Services/meta_thumbnail.service');
 const { INSIGHT_FIELDS } = require('../../Services/meta_insights_metrics.service');
 
 const GRAPH_PAGE_LIMIT = Math.min(
@@ -167,19 +168,6 @@ async function hydrateCreative(accessToken, creativeThing) {
     });
   }
   return {};
-}
-
-function pickThumbnailFromCreative(creativeObj) {
-  const c = creativeObj && typeof creativeObj === 'object' ? creativeObj : {};
-  if (c.thumbnail_url) return String(c.thumbnail_url);
-  if (c.image_url) return String(c.image_url);
-  const spec = c.object_story_spec;
-  if (spec && typeof spec === 'object') {
-    if (spec.link_data && spec.link_data.picture) return String(spec.link_data.picture);
-    if (spec.video_data && spec.video_data.image_url)
-      return String(spec.video_data.image_url);
-  }
-  return null;
 }
 
 function extractCreativeAndVideoIds(creativeObj) {
@@ -349,7 +337,9 @@ async function ensureMediaClaimAndEnqueueIfNew({
     if (metaAdIdStr && !nextMeta.metaAdGraphId) {
       nextMeta.metaAdGraphId = metaAdIdStr;
     }
-    if (thumbnailUrl && !nextMeta.thumbnailUrl) {
+    if (
+      metaThumbnail.shouldUpgradeStoredThumbnail(nextMeta.thumbnailUrl, thumbnailUrl)
+    ) {
       nextMeta.thumbnailUrl = thumbnailUrl;
     }
     if (objectType && !nextMeta.objectType) {
@@ -722,8 +712,12 @@ async function listLiveAdsByCampaign(
   const rows = [];
   for (const ad of items) {
     const hydrated = await hydrateCreative(accessToken, ad.creative);
-    const thumbnailUrl = pickThumbnailFromCreative(hydrated);
     const { videoId } = extractCreativeAndVideoIds(hydrated);
+    const thumbnailUrl = await metaThumbnail.resolveMetaThumbnailUrl(accessToken, {
+      creative: hydrated,
+      videoId,
+      graphClient: graph,
+    });
     const metaAdGraphId = String(ad.id);
     rows.push({
       id: metaAdGraphId,
@@ -830,7 +824,11 @@ async function ingestSingleAdHierarchy({
   const hydrated = await hydrateCreative(accessToken, adObj.creative);
   const parsedCreative = metaCreativeParser.parseAdCreativeForStorage(hydrated);
   const { creativeId, videoId } = extractCreativeAndVideoIds(hydrated);
-  const thumbnailUrl = pickThumbnailFromCreative(hydrated);
+  const thumbnailUrl = await metaThumbnail.resolveMetaThumbnailUrl(accessToken, {
+    creative: hydrated,
+    videoId,
+    graphClient: graph,
+  });
   const objectType =
     hydrated && hydrated.object_type != null ? String(hydrated.object_type) : null;
 
