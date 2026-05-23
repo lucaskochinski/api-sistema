@@ -40,9 +40,10 @@ function pickThumbnailFromRawCreative(rawCreative) {
 function applyPlaybackToMedia(playback, { isVideoAd, thumbnailUrl }) {
   if (!playback) {
     return {
-      mediaUrl: thumbnailUrl,
+      mediaUrl: isVideoAd ? null : thumbnailUrl,
       mediaType: isVideoAd ? 'video' : 'image',
       embedUrl: null,
+      thumbnailUrl,
     };
   }
 
@@ -52,6 +53,7 @@ function applyPlaybackToMedia(playback, { isVideoAd, thumbnailUrl }) {
       mediaType: 'video',
       embedUrl: playback.embedUrl || null,
       thumbnailUrl: playback.thumbnailUrl || thumbnailUrl,
+      playbackStrategy: playback.strategy || null,
     };
   }
 
@@ -64,14 +66,92 @@ function applyPlaybackToMedia(playback, { isVideoAd, thumbnailUrl }) {
     };
   }
 
+  if (playback.type === 'embed' && playback.embedUrl) {
+    return {
+      mediaUrl: null,
+      mediaType: 'embed',
+      embedUrl: playback.embedUrl,
+      thumbnailUrl: playback.thumbnailUrl || thumbnailUrl,
+      playbackUnavailable: Boolean(playback.unavailable),
+      playbackReason: playback.reason || 'video_source_instagram_only',
+      playbackStrategy: playback.strategy || null,
+    };
+  }
+
   return {
-    mediaUrl: playback.thumbnailUrl || thumbnailUrl,
-    mediaType: isVideoAd && playback.type === 'embed' ? 'embed' : isVideoAd ? 'video' : 'image',
+    mediaUrl: isVideoAd ? null : playback.thumbnailUrl || thumbnailUrl,
+    mediaType: isVideoAd ? 'video' : 'image',
     embedUrl: playback.embedUrl || null,
     thumbnailUrl: playback.thumbnailUrl || thumbnailUrl,
     playbackUnavailable: Boolean(playback.unavailable),
     playbackReason: playback.reason || null,
+    playbackStrategy: playback.strategy || null,
   };
+}
+
+async function loadAdMediaContext(organizationId, { metaVideoId, metaAdGraphId, rawCreative } = {}) {
+  if (rawCreative && metaAdGraphId) {
+    return { metaAdGraphId, rawCreative };
+  }
+
+  const where = { organizationId };
+  if (metaAdGraphId) where.metaAdId = String(metaAdGraphId);
+  else if (metaVideoId) where.metaVideoId = String(metaVideoId);
+  else return { metaAdGraphId: metaAdGraphId || null, rawCreative: rawCreative || null };
+
+  const ad = await db.Ad.findOne({
+    where,
+    attributes: ['metaAdId', 'rawCreativeData', 'metaVideoId'],
+    order: [['updatedAt', 'DESC']],
+  });
+
+  if (!ad) {
+    return {
+      metaAdGraphId: metaAdGraphId || null,
+      rawCreative: rawCreative || null,
+    };
+  }
+
+  const storedCreative =
+    ad.rawCreativeData && typeof ad.rawCreativeData === 'object' ? ad.rawCreativeData : null;
+
+  return {
+    metaAdGraphId: metaAdGraphId || ad.metaAdId || null,
+    rawCreative: rawCreative || storedCreative,
+    metaVideoId: metaVideoId || ad.metaVideoId || null,
+  };
+}
+
+async function resolveInsightMediaPlayback(
+  organizationId,
+  { mediaId, metaVideoId, metaAdGraphId, rawCreative, isVideoAd, thumbnailUrl },
+) {
+  const adContext = await loadAdMediaContext(organizationId, {
+    metaVideoId,
+    metaAdGraphId,
+    rawCreative,
+  });
+
+  let playback = await metaVideoPlayback.fetchMetaVideoPlayback(organizationId, {
+    metaVideoId: adContext.metaVideoId || metaVideoId,
+    metaAdGraphId: adContext.metaAdGraphId || metaAdGraphId,
+    rawCreative: adContext.rawCreative || rawCreative,
+  });
+
+  if (!playback?.url && mediaId) {
+    try {
+      const refreshed = await refreshMediaUrl(organizationId, mediaId, {
+        metaAdGraphId: adContext.metaAdGraphId || metaAdGraphId,
+        rawCreative: adContext.rawCreative || rawCreative,
+      });
+      if (refreshed?.url && refreshed.type === 'video') playback = refreshed;
+      else if (!playback?.embedUrl && refreshed?.embedUrl) playback = refreshed;
+    } catch (refreshErr) {
+      console.warn('[dashboard] insight media refresh fallback', refreshErr.message);
+    }
+  }
+
+  return applyPlaybackToMedia(playback, { isVideoAd, thumbnailUrl });
 }
 
 async function orgCanAccessMedia(organizationId, mediaId, mediaRow) {
@@ -499,7 +579,7 @@ async function listImportedCampaigns(organizationId) {
   });
 }
 
-async function refreshMediaUrl(organizationId, mediaId) {
+async function refreshMediaUrl(organizationId, mediaId, options = {}) {
   const media = await db.MediaAsset.findByPk(mediaId);
 
   if (!media || !(await orgCanAccessMedia(organizationId, mediaId, media))) {
@@ -508,7 +588,13 @@ async function refreshMediaUrl(organizationId, mediaId) {
     throw err;
   }
 
-  const metaAdGraphId = media.ingestMetadata?.metaAdGraphId || null;
+  const adContext = await loadAdMediaContext(organizationId, {
+    metaVideoId: media.metaVideoId,
+    metaAdGraphId: options.metaAdGraphId || media.ingestMetadata?.metaAdGraphId || null,
+    rawCreative: options.rawCreative || null,
+  });
+
+  const metaAdGraphId = adContext.metaAdGraphId;
   if (!media.metaVideoId && !metaAdGraphId) {
     const err = new Error('no_meta_reference_for_refresh');
     err.statusCode = 400;
@@ -518,6 +604,7 @@ async function refreshMediaUrl(organizationId, mediaId) {
   const playback = await metaVideoPlayback.fetchMetaVideoPlayback(organizationId, {
     metaVideoId: media.metaVideoId,
     metaAdGraphId,
+    rawCreative: adContext.rawCreative,
   });
 
   if (playback.url && playback.type === 'video') {
@@ -529,7 +616,13 @@ async function refreshMediaUrl(organizationId, mediaId) {
       lastRefreshedAt: new Date().toISOString(),
       lastPlaybackStrategy: playback.strategy || null,
     };
+    if (metaAdGraphId) nextMeta.metaAdGraphId = metaAdGraphId;
     await media.update({ ingestMetadata: nextMeta });
+
+    const resolvedVideoId = metaVideoPlayback.extractVideoIdFromRawCreative(adContext.rawCreative);
+    if (resolvedVideoId && resolvedVideoId !== media.metaVideoId) {
+      await media.update({ metaVideoId: resolvedVideoId }).catch(() => {});
+    }
   }
 
   return playback;
@@ -697,29 +790,21 @@ async function getInsightDetails(organizationId, adId) {
     mediaType = 'drive';
   } else {
     try {
-      let playback = null;
-      if (mediaId) {
-        try {
-          playback = await refreshMediaUrl(organizationId, mediaId);
-        } catch (refreshErr) {
-          console.warn('[dashboard] insight media refresh fallback', refreshErr.message);
-        }
-      }
-      if (!playback?.url) {
-        playback = await metaVideoPlayback.fetchMetaVideoPlayback(organizationId, {
-          metaVideoId: metaVideoId || r.ad_meta_video_id,
-          metaAdGraphId: r.meta_ad_id,
-          rawCreative,
-        });
-      }
-      const applied = applyPlaybackToMedia(playback, { isVideoAd, thumbnailUrl });
+      const applied = await resolveInsightMediaPlayback(organizationId, {
+        mediaId,
+        metaVideoId,
+        metaAdGraphId: r.meta_ad_id,
+        rawCreative,
+        isVideoAd,
+        thumbnailUrl,
+      });
       mediaUrl = applied.mediaUrl;
       mediaType = applied.mediaType;
       embedUrl = applied.embedUrl || null;
       if (applied.thumbnailUrl) thumbnailUrl = applied.thumbnailUrl;
     } catch (mediaErr) {
       console.warn('[dashboard] insight media resolve failed', mediaErr.message);
-      mediaUrl = thumbnailUrl;
+      mediaUrl = null;
       mediaType = isVideoAd ? 'video' : 'image';
       embedUrl = rawCreative.instagram_permalink_url || null;
     }

@@ -2,6 +2,7 @@
 
 const graph = require('./meta_graph.client');
 const metaService = require('../Features/Meta/meta.service');
+const metaCreativeParser = require('../Features/MetaSync/meta_ad_creative_parser');
 
 const AD_CREATIVE_VIDEO_FIELDS =
   'creative{id,video_id,object_type,thumbnail_url,image_url,instagram_permalink_url,object_story_spec{video_data{video_id,image_url}},asset_feed_spec{videos{video_id}}}';
@@ -10,16 +11,13 @@ function graphPayloadHasError(payload) {
   return Boolean(payload && typeof payload === 'object' && payload.error);
 }
 
+function extractVideoIdsFromCreative(creative) {
+  return metaCreativeParser.extractVideoIdsFromCreative(creative);
+}
+
 function extractVideoIdFromCreative(creative) {
-  if (!creative || typeof creative !== 'object') return null;
-  if (creative.video_id) return String(creative.video_id);
-  const feedVideos = creative.asset_feed_spec?.videos;
-  if (Array.isArray(feedVideos) && feedVideos[0]?.video_id) {
-    return String(feedVideos[0].video_id);
-  }
-  const spec = creative.object_story_spec;
-  if (spec?.video_data?.video_id) return String(spec.video_data.video_id);
-  return null;
+  const ids = extractVideoIdsFromCreative(creative);
+  return ids[0] || null;
 }
 
 function extractVideoIdFromRawCreative(rawCreative) {
@@ -101,7 +99,7 @@ async function fetchMetaVideoPlayback(organizationId, { metaVideoId, metaAdGraph
 
   const candidateIds = uniqueIds([
     metaVideoId,
-    extractVideoIdFromRawCreative(rawCreative),
+    ...extractVideoIdsFromCreative(rawCreative),
   ]);
 
   for (const vid of candidateIds) {
@@ -124,8 +122,10 @@ async function fetchMetaVideoPlayback(organizationId, { metaVideoId, metaAdGraph
       instagramPermalink =
         creative?.instagram_permalink_url || instagramPermalink || null;
 
-      const creativeVideoId = extractVideoIdFromCreative(creative);
-      if (creativeVideoId && !candidateIds.includes(creativeVideoId)) {
+      for (const creativeVideoId of extractVideoIdsFromCreative(creative)) {
+        if (candidateIds.includes(creativeVideoId)) continue;
+        candidateIds.push(creativeVideoId);
+
         const fromNode = await fetchVideoSourceById(accessToken, creativeVideoId);
         if (fromNode) return fromNode;
 
@@ -183,4 +183,5 @@ module.exports = {
   fetchMetaVideoPlayback,
   extractVideoIdFromRawCreative,
   extractVideoIdFromCreative,
+  extractVideoIdsFromCreative,
 };

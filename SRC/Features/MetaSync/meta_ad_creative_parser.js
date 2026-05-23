@@ -30,30 +30,43 @@ function hasUsableAssetFeed(feed) {
   return keys.some((k) => Array.isArray(feed[k]) && feed[k].length > 0);
 }
 
+function pushVideoId(ids, raw) {
+  const s = raw != null ? String(raw).trim() : '';
+  if (!s || ids.includes(s)) return;
+  ids.push(s);
+}
+
+/**
+ * Todos os IDs de vídeo candidatos (ordem de prioridade para playback).
+ * `object_story_spec.video_data` costuma ter o MP4; `creative.video_id` pode ser reel IG sem source.
+ */
+function extractVideoIdsFromCreative(creative) {
+  const c = creative && typeof creative === 'object' ? creative : {};
+  const ids = [];
+  const spec = c.object_story_spec;
+
+  if (spec && typeof spec === 'object') {
+    pushVideoId(ids, spec.video_data?.video_id);
+    pushVideoId(ids, spec.link_data?.video_id);
+  }
+
+  if (c.asset_feed_spec && hasUsableAssetFeed(c.asset_feed_spec)) {
+    const videos = c.asset_feed_spec.videos;
+    if (Array.isArray(videos)) {
+      for (const row of videos) pushVideoId(ids, row?.video_id);
+    }
+  }
+
+  pushVideoId(ids, c.video_id);
+  return ids;
+}
+
 /**
  * Extrai vídeo quando presente nos vários layouts.
  */
 function extractVideoIdFromCreative(creative) {
-  const c = creative && typeof creative === 'object' ? creative : {};
-  let vid =
-    c.video_id != null && String(c.video_id).trim()
-      ? String(c.video_id).trim()
-      : null;
-  const spec = c.object_story_spec;
-  if (!vid && spec && typeof spec === 'object') {
-    const vd = spec.video_data;
-    if (vd && vd.video_id) vid = String(vd.video_id);
-    else if (spec.link_data && spec.link_data.video_id)
-      vid = String(spec.link_data.video_id);
-  }
-  if (!vid && c.asset_feed_spec && hasUsableAssetFeed(c.asset_feed_spec)) {
-    const videos = c.asset_feed_spec.videos;
-    if (Array.isArray(videos) && videos.length) {
-      const v0 = videos[0];
-      if (v0 && v0.video_id) vid = String(v0.video_id);
-    }
-  }
-  return vid || null;
+  const ids = extractVideoIdsFromCreative(creative);
+  return ids[0] || null;
 }
 
 /**
@@ -163,5 +176,6 @@ function parseAdCreativeForStorage(creative) {
 module.exports = {
   parseAdCreativeForStorage,
   extractVideoIdFromCreative,
+  extractVideoIdsFromCreative,
   hasUsableAssetFeed,
 };

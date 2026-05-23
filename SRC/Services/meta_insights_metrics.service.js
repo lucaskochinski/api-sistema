@@ -94,6 +94,21 @@ function strField(metricsJsonb, field) {
   return v != null && String(v).trim() ? String(v).trim() : null;
 }
 
+function isMeaningfulMetaRanking(value) {
+  if (!value) return false;
+  const normalized = String(value).trim().toUpperCase();
+  return normalized !== 'UNKNOWN' && normalized !== 'N/A' && normalized !== 'NONE';
+}
+
+function assignMetaRanking(agg, field, value) {
+  if (!value) return;
+  if (isMeaningfulMetaRanking(value)) {
+    agg[field] = value;
+    return;
+  }
+  if (!agg[field]) agg[field] = value;
+}
+
 function sumAction(metricsJsonb, actionType) {
   const actions = rawRow(metricsJsonb).actions || [];
   const match = actions.find((a) => a.action_type === actionType);
@@ -322,9 +337,9 @@ function aggregateDailyMetrics(rows) {
       }
       agg.curveWeight += m.videoPlays;
     }
-    if (m.qualityRanking) agg.qualityRanking = m.qualityRanking;
-    if (m.engagementRateRanking) agg.engagementRateRanking = m.engagementRateRanking;
-    if (m.conversionRateRanking) agg.conversionRateRanking = m.conversionRateRanking;
+    if (m.qualityRanking) assignMetaRanking(agg, 'qualityRanking', m.qualityRanking);
+    if (m.engagementRateRanking) assignMetaRanking(agg, 'engagementRateRanking', m.engagementRateRanking);
+    if (m.conversionRateRanking) assignMetaRanking(agg, 'conversionRateRanking', m.conversionRateRanking);
     if (m.creativeDiversityScore) agg.creativeDiversityScore = m.creativeDiversityScore;
     if (m.creativeDiversityLabel) agg.creativeDiversityLabel = m.creativeDiversityLabel;
     if (m.creativeFatigueSummary) agg.creativeFatigueSummary = m.creativeFatigueSummary;
@@ -395,9 +410,13 @@ function formatAggregate(agg) {
       retention75Pct: agg.videoPlays > 0 ? Math.round((agg.video75 / agg.videoPlays) * 10000) / 100 : 0,
     },
     creativeHealth: {
-      qualityRanking: agg.qualityRanking,
-      engagementRateRanking: agg.engagementRateRanking,
-      conversionRateRanking: agg.conversionRateRanking,
+      qualityRanking: isMeaningfulMetaRanking(agg.qualityRanking) ? agg.qualityRanking : null,
+      engagementRateRanking: isMeaningfulMetaRanking(agg.engagementRateRanking)
+        ? agg.engagementRateRanking
+        : null,
+      conversionRateRanking: isMeaningfulMetaRanking(agg.conversionRateRanking)
+        ? agg.conversionRateRanking
+        : null,
       creativeDiversityScore: agg.creativeDiversityScore,
       creativeDiversityLabel: agg.creativeDiversityLabel,
       creativeFatigueSummary: agg.creativeFatigueSummary,
