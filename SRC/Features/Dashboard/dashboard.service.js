@@ -4,6 +4,9 @@ const { QueryTypes } = require('sequelize');
 const db = require('../../Models');
 const metaService = require('../Meta/meta.service');
 const graph = require('../../Services/meta_graph.client');
+const creativeFormat = require('../../Services/creative_format.service');
+const metaMetrics = require('../../Services/meta_insights_metrics.service');
+const metaBreakdowns = require('../../Services/meta_insights_breakdown.service');
 
 function clampInt(value, fallback, max) {
   const n = Number.parseInt(value, 10);
@@ -23,29 +26,37 @@ function buildDriveViewUrl(googleDriveFileId) {
   return `https://drive.google.com/file/d/${encodeURIComponent(id)}/view`;
 }
 
+function pickThumbnailFromRawCreative(rawCreative) {
+  const c = rawCreative && typeof rawCreative === 'object' ? rawCreative : {};
+  if (c.thumbnail_url) return String(c.thumbnail_url);
+  if (c.image_url) return String(c.image_url);
+  const spec = c.object_story_spec;
+  if (spec && typeof spec === 'object') {
+    if (spec.link_data?.picture) return String(spec.link_data.picture);
+    if (spec.video_data?.image_url) return String(spec.video_data.image_url);
+  }
+  return null;
+}
+
+function graphPayloadHasError(payload) {
+  return Boolean(payload && typeof payload === 'object' && payload.error);
+}
+
 /**
  * KPIs consolidados por organização na série diária de ads + contagem de análises criativas.
  */
-function sumAction(metricsJsonb, actionType) {
-  const actions = metricsJsonb?.raw?.actions || [];
-  const match = actions.find(a => a.action_type === actionType);
-  return match ? Number(match.value || 0) : 0;
-}
+async function getOverview(organizationId, { period = 'today' } = {}) {
+  const { since, until, period: resolvedPeriod } = metaMetrics.resolvePeriodDates(period);
 
-function sumVideoAction(metricsJsonb, actionField) {
-  const actions = metricsJsonb?.raw?.[actionField] || [];
-  const match = actions.find(a => a.action_type === 'video_view');
-  return match ? Number(match.value || 0) : 0;
-}
-
-async function getOverview(organizationId) {
   const [spendAgg] = await db.sequelize.query(
     `SELECT COALESCE(SUM(apd.spend), 0)::decimal AS total_spend
      FROM ad_performance_daily apd
      INNER JOIN ads a ON a.id = apd.ad_id
-     WHERE apd.organization_id = :organizationId`,
+     WHERE apd.organization_id = :organizationId
+       AND apd.snapshot_date >= :since
+       AND apd.snapshot_date <= :until`,
     {
-      replacements: { organizationId },
+      replacements: { organizationId, since, until },
       type: QueryTypes.SELECT,
     },
   );
@@ -57,9 +68,11 @@ async function getOverview(organizationId) {
        END AS weighted_roas
      FROM ad_performance_daily apd
      INNER JOIN ads a ON a.id = apd.ad_id
-     WHERE apd.organization_id = :organizationId`,
+     WHERE apd.organization_id = :organizationId
+       AND apd.snapshot_date >= :since
+       AND apd.snapshot_date <= :until`,
     {
-      replacements: { organizationId },
+      replacements: { organizationId, since, until },
       type: QueryTypes.SELECT,
     },
   );
@@ -68,36 +81,48 @@ async function getOverview(organizationId) {
     where: { organizationId },
   });
 
-  // Buscando todos os registros de performance para o Funil e os Rankings (somente para anúncios importados)
   const perfRows = await db.AdPerformanceDaily.findAll({
-    where: { organizationId },
-    include: [{ model: db.Ad, as: 'ad', required: true }]
+    where: {
+      organizationId,
+      snapshotDate: {
+        [db.Sequelize.Op.gte]: since,
+        [db.Sequelize.Op.lte]: until,
+      },
+    },
+    include: [{ model: db.Ad, as: 'ad', required: true }],
   });
 
-  let totalCliques = 0;
-  let totalPageViews = 0;
-  let totalInitiateCheckouts = 0;
-  let totalPurchases = 0;
-  
+  const aggregated = metaMetrics.aggregateDailyMetrics(perfRows);
+
   const adMap = new Map();
+  const dailyMap = new Map();
 
   for (const row of perfRows) {
+    const extracted = metaMetrics.extractDailyMetrics(row.metricsJsonb);
     const clicks = Number(row.clicks || 0);
     const spend = Number(row.spend || 0);
     const impressions = Number(row.impressions || 0);
-    
-    const pageViews = sumAction(row.metricsJsonb, 'landing_page_view');
-    const initiateCheckouts = sumAction(row.metricsJsonb, 'initiate_checkout');
-    const purchases = sumAction(row.metricsJsonb, 'purchase');
-    
-    const video3s = sumVideoAction(row.metricsJsonb, 'video_3_sec_watched_actions');
-    const video75 = sumVideoAction(row.metricsJsonb, 'video_p75_watched_actions');
-    const videoPlays = sumVideoAction(row.metricsJsonb, 'video_play_actions');
+    const roas = Number(row.roas || 0);
 
-    totalCliques += clicks;
-    totalPageViews += pageViews;
-    totalInitiateCheckouts += initiateCheckouts;
-    totalPurchases += purchases;
+    const dateKey = row.snapshotDate;
+    if (!dailyMap.has(dateKey)) {
+      dailyMap.set(dateKey, {
+        date: dateKey,
+        spend: 0,
+        impressions: 0,
+        clicks: 0,
+        reach: 0,
+        roasWeighted: 0,
+        roasSpend: 0,
+      });
+    }
+    const daily = dailyMap.get(dateKey);
+    daily.spend += spend;
+    daily.impressions += impressions;
+    daily.clicks += clicks;
+    daily.reach += extracted.reach;
+    daily.roasWeighted += roas * spend;
+    daily.roasSpend += spend;
 
     if (!row.adId) continue;
     if (!adMap.has(row.adId)) {
@@ -108,22 +133,28 @@ async function getOverview(organizationId) {
         clicks: 0,
         pageViews: 0,
         initiateCheckouts: 0,
+        addToCart: 0,
         purchases: 0,
         video3s: 0,
         video75: 0,
         videoPlays: 0,
+        roasWeighted: 0,
+        roasSpend: 0,
       });
     }
     const adData = adMap.get(row.adId);
     adData.spend += spend;
     adData.impressions += impressions;
     adData.clicks += clicks;
-    adData.pageViews += pageViews;
-    adData.initiateCheckouts += initiateCheckouts;
-    adData.purchases += purchases;
-    adData.video3s += video3s;
-    adData.video75 += video75;
-    adData.videoPlays += videoPlays;
+    adData.pageViews += extracted.pageViews;
+    adData.initiateCheckouts += extracted.initiateCheckouts;
+    adData.addToCart += extracted.addToCart;
+    adData.purchases += extracted.purchases;
+    adData.video3s += extracted.video3s;
+    adData.video75 += extracted.video75;
+    adData.videoPlays += extracted.videoPlays;
+    adData.roasWeighted += roas * spend;
+    adData.roasSpend += spend;
   }
 
   const adList = Array.from(adMap.values());
@@ -131,43 +162,88 @@ async function getOverview(organizationId) {
   const getBest = (list, scoreFn, ascending = false) => {
     if (!list.length) return null;
     const sorted = [...list]
-      .map(item => ({ item, score: scoreFn(item) }))
-      .filter(x => x.score !== null && Number.isFinite(x.score) && x.score > 0);
-    
+      .map((item) => ({ item, score: scoreFn(item) }))
+      .filter((x) => x.score !== null && Number.isFinite(x.score) && x.score > 0);
+
     if (!sorted.length) return null;
-    sorted.sort((a, b) => ascending ? a.score - b.score : b.score - a.score);
+    sorted.sort((a, b) => (ascending ? a.score - b.score : b.score - a.score));
     return sorted[0];
   };
 
-  const bestHook = getBest(adList, ad => ad.impressions > 0 ? (ad.video3s / ad.impressions) * 100 : 0);
-  const bestRetention = getBest(adList, ad => ad.videoPlays > 0 ? (ad.video75 / ad.videoPlays) * 100 : 0);
-  const bestCtr = getBest(adList, ad => ad.impressions > 0 ? (ad.clicks / ad.impressions) * 100 : 0);
-  const bestCostIc = getBest(adList, ad => ad.initiateCheckouts > 0 ? (ad.spend / ad.initiateCheckouts) : null, true);
-  const bestRoi = getBest(adList, ad => ad.spend > 0 ? (ad.purchases * 97 / ad.spend) * 100 : 0);
-  const bestSalesVolume = getBest(adList, ad => ad.purchases);
-  const bestConversionRate = getBest(adList, ad => ad.pageViews > 0 ? (ad.purchases / ad.pageViews) * 100 : 0);
+  const bestHook = getBest(adList, (ad) =>
+    ad.impressions > 0 ? (ad.video3s / ad.impressions) * 100 : 0,
+  );
+  const bestRetention = getBest(adList, (ad) =>
+    ad.videoPlays > 0 ? (ad.video75 / ad.videoPlays) * 100 : 0,
+  );
+  const bestCtr = getBest(adList, (ad) =>
+    ad.impressions > 0 ? (ad.clicks / ad.impressions) * 100 : 0,
+  );
+  const bestCostIc = getBest(
+    adList,
+    (ad) => (ad.initiateCheckouts > 0 ? ad.spend / ad.initiateCheckouts : null),
+    true,
+  );
+  const bestRoas = getBest(adList, (ad) =>
+    ad.roasSpend > 0 ? ad.roasWeighted / ad.roasSpend : 0,
+  );
+  const bestSalesVolume = getBest(adList, (ad) => ad.purchases);
+  const bestConversionRate = getBest(adList, (ad) =>
+    ad.pageViews > 0 ? (ad.purchases / ad.pageViews) * 100 : 0,
+  );
+
+  const dailyMeta = Array.from(dailyMap.values())
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+    .map((d) => ({
+      date: d.date,
+      label: metaMetrics.formatDailyLabel(d.date),
+      spend: Math.round(d.spend * 100) / 100,
+      impressions: d.impressions,
+      clicks: d.clicks,
+      reach: d.reach,
+      roas: d.roasSpend > 0 ? Math.round((d.roasWeighted / d.roasSpend) * 100) / 100 : 0,
+      ctr: d.impressions > 0 ? Math.round((d.clicks / d.impressions) * 10000) / 100 : 0,
+    }));
 
   return {
+    period: resolvedPeriod,
+    dateRange: { since, until },
     totalSpend: spendAgg?.total_spend != null ? String(spendAgg.total_spend) : '0',
     globalRoasWeighted:
       roasWeighted[0]?.weighted_roas != null ? String(roasWeighted[0].weighted_roas) : null,
     creativeAnalysesCount: analyzed,
+    delivery: aggregated.delivery,
     funnel: {
-      cliques: totalCliques,
-      pageViews: totalPageViews,
-      initiateCheckouts: totalInitiateCheckouts,
-      vendasIniciadas: Math.round(totalPurchases * 1.3),
-      vendasAprovadas: totalPurchases,
+      impressions: aggregated.delivery.impressions,
+      cliques: aggregated.delivery.clicks,
+      ...aggregated.funnel,
     },
+    videoMetrics: aggregated.video,
+    videoRetention: aggregated.videoRetention,
+    videoPlayCurve: aggregated.videoPlayCurve,
+    creativeHealth: aggregated.creativeHealth,
+    dailyMeta,
     rankings: {
-      bestHook: bestHook ? `${bestHook.item.name} (${bestHook.score.toFixed(1)}%)` : 'Sem dados',
-      bestRetention: bestRetention ? `${bestRetention.item.name} (${bestRetention.score.toFixed(1)}%)` : 'Sem dados',
+      bestHook: bestHook
+        ? `${bestHook.item.name} (${bestHook.score.toFixed(1)}%)`
+        : 'Sem dados',
+      bestRetention: bestRetention
+        ? `${bestRetention.item.name} (${bestRetention.score.toFixed(1)}%)`
+        : 'Sem dados',
       bestCtr: bestCtr ? `${bestCtr.item.name} (${bestCtr.score.toFixed(1)}%)` : 'Sem dados',
-      bestCostIc: bestCostIc ? `${bestCostIc.item.name} (R$ ${bestCostIc.score.toFixed(2)})` : 'Sem dados',
-      bestRoi: bestRoi ? `${bestRoi.item.name} (${bestRoi.score.toFixed(0)}%)` : 'Sem dados',
-      bestSalesVolume: bestSalesVolume ? `${bestSalesVolume.item.name} (${bestSalesVolume.score} vendas)` : 'Sem dados',
-      bestConversionRate: bestConversionRate ? `${bestConversionRate.item.name} (${bestConversionRate.score.toFixed(1)}%)` : 'Sem dados',
-    }
+      bestCostIc: bestCostIc
+        ? `${bestCostIc.item.name} (R$ ${bestCostIc.score.toFixed(2)})`
+        : 'Sem dados',
+      bestRoas: bestRoas
+        ? `${bestRoas.item.name} (${bestRoas.score.toFixed(2)} ROAS)`
+        : 'Sem dados',
+      bestSalesVolume: bestSalesVolume
+        ? `${bestSalesVolume.item.name} (${bestSalesVolume.score} vendas)`
+        : 'Sem dados',
+      bestConversionRate: bestConversionRate
+        ? `${bestConversionRate.item.name} (${bestConversionRate.score.toFixed(1)}%)`
+        : 'Sem dados',
+    },
   };
 }
 
@@ -248,6 +324,7 @@ async function getInsights(
       ad.id AS ad_id,
       ad.name AS ad_name,
       ad.meta_ad_id,
+      ad.raw_creative_data,
       ma.id AS media_id,
       ma.google_drive_file_id,
       ma.meta_video_id AS media_meta_video_id,
@@ -288,6 +365,14 @@ async function getInsights(
     /** @type {Record<string, unknown>} */
     const ingestMeta =
       r.ingest_metadata && typeof r.ingest_metadata === 'object' ? r.ingest_metadata : {};
+    const rawCreative =
+      r.raw_creative_data && typeof r.raw_creative_data === 'object' ? r.raw_creative_data : {};
+
+    const thumbnailUrl = gdf
+      ? buildDriveThumbnailUrl(gdf)
+      : ingestMeta.thumbnailUrl ||
+        pickThumbnailFromRawCreative(rawCreative) ||
+        null;
 
     return {
       creativeAnalysisId: r.creative_analysis_id,
@@ -298,7 +383,7 @@ async function getInsights(
       campaignName: r.campaign_name,
       metaCampaignId: r.meta_campaign_id,
       mediaId: r.media_id,
-      thumbnailUrl: gdf ? buildDriveThumbnailUrl(gdf) : (ingestMeta.thumbnailUrl || null),
+      thumbnailUrl,
       driveViewUrl: gdf ? buildDriveViewUrl(gdf) : null,
       metaVideoId: r.media_meta_video_id || null,
       analyzedAt: r.analyzed_at,
@@ -361,51 +446,93 @@ async function listImportedCampaigns(organizationId) {
 async function refreshMediaUrl(organizationId, mediaId) {
   const analysis = await db.CreativeAnalysis.findOne({
     where: { organizationId, mediaId },
-    include: [{ model: db.MediaAsset, as: 'media' }]
+    include: [{ model: db.MediaAsset, as: 'media' }],
   });
-  
-  if (!analysis || !analysis.media) {
+
+  let media = analysis?.media || null;
+  if (!media) {
+    const claim = await db.OrganizationMediaClaim.findOne({
+      where: { organizationId, mediaId },
+      include: [{ model: db.MediaAsset, as: 'mediaAsset' }],
+    });
+    media = claim?.mediaAsset || null;
+  }
+
+  if (!media) {
     const err = new Error('media_not_found');
     err.statusCode = 404;
     throw err;
   }
-  
-  const media = analysis.media;
+
   if (!media.metaVideoId && (!media.ingestMetadata || !media.ingestMetadata.metaAdGraphId)) {
     const err = new Error('no_meta_reference_for_refresh');
     err.statusCode = 400;
     throw err;
   }
-  
+
   const { accessToken } = await metaService.getValidToken(organizationId);
-  
+
   if (media.metaVideoId) {
-    try {
-      const vhead = await graph.fbGet(accessToken, String(media.metaVideoId), {
-        fields: 'source,picture',
-      });
+    const vhead = await graph.fbGet(accessToken, String(media.metaVideoId), {
+      fields: 'source,picture',
+    });
+    if (graphPayloadHasError(vhead)) {
+      const err = new Error(vhead.error.message || 'meta_video_lookup_failed');
+      err.statusCode = 502;
+      throw err;
+    }
+    if (vhead?.source) {
+      const nextMeta = {
+        ...(media.ingestMetadata && typeof media.ingestMetadata === 'object'
+          ? media.ingestMetadata
+          : {}),
+        thumbnailUrl: vhead.picture || media.ingestMetadata?.thumbnailUrl || null,
+        lastRefreshedAt: new Date().toISOString(),
+      };
+      await media.update({ ingestMetadata: nextMeta });
+
       return {
         type: 'video',
         url: vhead.source,
-        thumbnailUrl: vhead.picture,
+        thumbnailUrl: vhead.picture || nextMeta.thumbnailUrl || null,
       };
-    } catch (e) {
-      console.warn(`[Refresh] Failed to get video source for ${media.metaVideoId}`, e.message);
     }
   }
-  
+
   if (media.ingestMetadata?.metaAdGraphId) {
     const adGraphId = media.ingestMetadata.metaAdGraphId;
     const adData = await graph.fbGet(accessToken, String(adGraphId), {
-      fields: 'creative{image_url,thumbnail_url}',
+      fields: 'creative{image_url,thumbnail_url,video_id}',
     });
+    if (graphPayloadHasError(adData)) {
+      const err = new Error(adData.error.message || 'meta_ad_lookup_failed');
+      err.statusCode = 502;
+      throw err;
+    }
+
+    const creative = adData.creative || {};
+    const thumbnailUrl = creative.thumbnail_url || creative.image_url || null;
+
+    if (creative.video_id) {
+      const vhead = await graph.fbGet(accessToken, String(creative.video_id), {
+        fields: 'source,picture',
+      });
+      if (!graphPayloadHasError(vhead) && vhead?.source) {
+        return {
+          type: 'video',
+          url: vhead.source,
+          thumbnailUrl: vhead.picture || thumbnailUrl,
+        };
+      }
+    }
+
     return {
       type: 'image',
-      url: adData.creative?.image_url || adData.creative?.thumbnail_url,
-      thumbnailUrl: adData.creative?.thumbnail_url || adData.creative?.image_url,
+      url: creative.image_url || thumbnailUrl,
+      thumbnailUrl,
     };
   }
-  
+
   return { type: 'unknown', url: null, thumbnailUrl: null };
 }
 
@@ -421,10 +548,14 @@ async function getInsightDetails(organizationId, adId) {
     SELECT
       ad.id AS ad_id,
       ad.name AS ad_name,
+      ad.meta_ad_id,
+      ad.meta_video_id AS ad_meta_video_id,
       ad.raw_creative_data,
       ca.id AS creative_analysis_id,
       ca.ai_analysis,
       ca.performance_snapshot,
+      ma.id AS media_id,
+      ma.meta_video_id,
       ma.google_drive_file_id,
       ma.ingest_metadata
     FROM ads ad
@@ -448,24 +579,48 @@ async function getInsightDetails(organizationId, adId) {
 
   const perfRows = await db.AdPerformanceDaily.findAll({
     where: { organizationId, adId },
-    order: [['date', 'ASC']]
+    order: [['snapshotDate', 'ASC']],
   });
 
-  const performance_daily = perfRows.map(p => ({
-    date: p.date,
-    label: new Date(p.date).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', timeZone: 'UTC' }),
-    spend: Number(p.spend || 0),
-    roas: Number(p.roas || 0),
-    ctr: Number(p.ctr || 0),
-    impressions: Number(p.impressions || 0),
-  }));
+  const performance_daily = perfRows.map((p) => {
+    const extracted = metaMetrics.extractDailyMetrics(p.metricsJsonb);
+
+    return {
+      date: p.snapshotDate,
+      label: metaMetrics.formatDailyLabel(p.snapshotDate),
+      spend: Number(p.spend || 0),
+      roas: Number(p.roas || 0),
+      ctr: Number(p.ctr || 0),
+      impressions: Number(p.impressions || 0),
+      clicks: Number(p.clicks || 0),
+      reach: extracted.reach,
+      frequency: extracted.frequency,
+      inlineLinkClicks: extracted.inlineLinkClicks,
+      video: {
+        plays: extracted.videoPlays,
+        watched2s: extracted.video2s,
+        watched3s: extracted.video3s,
+        watched6s: extracted.video6s,
+        watched15s: extracted.video15s,
+        watched25: extracted.video25,
+        watched50: extracted.video50,
+        watched75: extracted.video75,
+        watched95: extracted.video95,
+        watched100: extracted.video100,
+        watched30s: extracted.video30s,
+        thruplay: extracted.videoThruplay,
+        avgWatchTimeSec: extracted.videoAvgTime,
+      },
+    };
+  });
+
+  const metaAggregated = metaMetrics.aggregateDailyMetrics(perfRows);
 
   const rawCreative = r.raw_creative_data && typeof r.raw_creative_data === 'object' ? r.raw_creative_data : {};
   
   let primaryText = '';
   let headline = '';
   let ctaType = '';
-  let mediaUrl = null;
 
   if (rawCreative.object_story_spec) {
     const linkData = rawCreative.object_story_spec.link_data || {};
@@ -473,7 +628,6 @@ async function getInsightDetails(organizationId, adId) {
     primaryText = linkData.message || videoData.message || rawCreative.body || '';
     headline = linkData.name || videoData.title || rawCreative.title || '';
     ctaType = linkData.call_to_action?.type || videoData.call_to_action?.type || rawCreative.call_to_action_type || '';
-    mediaUrl = videoData.image_url || linkData.image_hash ? null : null; // Usually we use media_assets
   } else if (rawCreative.asset_feed_spec) {
     const texts = rawCreative.asset_feed_spec.bodies || [];
     const titles = rawCreative.asset_feed_spec.titles || [];
@@ -487,33 +641,136 @@ async function getInsightDetails(organizationId, adId) {
   if (!headline) headline = rawCreative.title || r.ad_name;
   if (!ctaType) ctaType = rawCreative.call_to_action_type || 'LEARN_MORE';
 
+  let mediaId = r.media_id || null;
+  let metaVideoId = r.meta_video_id || r.ad_meta_video_id || null;
+
+  if (!mediaId && metaVideoId) {
+    const mediaRow = await db.MediaAsset.findOne({ where: { metaVideoId } });
+    if (mediaRow) {
+      mediaId = mediaRow.id;
+      metaVideoId = mediaRow.metaVideoId;
+    }
+  }
+
   const ingestMeta = r.ingest_metadata && typeof r.ingest_metadata === 'object' ? r.ingest_metadata : {};
+  const googleDriveFileId = r.google_drive_file_id
+    ? String(r.google_drive_file_id).trim()
+    : '';
+
   let thumbnailUrl = '/imagens/meta.png';
-  if (r.google_drive_file_id) {
-    thumbnailUrl = buildDriveThumbnailUrl(String(r.google_drive_file_id).trim());
+  if (googleDriveFileId) {
+    thumbnailUrl = buildDriveThumbnailUrl(googleDriveFileId);
   } else if (ingestMeta.thumbnailUrl) {
     thumbnailUrl = ingestMeta.thumbnailUrl;
   } else if (rawCreative.thumbnail_url || rawCreative.image_url) {
     thumbnailUrl = rawCreative.thumbnail_url || rawCreative.image_url;
   }
 
+  let mediaUrl = null;
+  let mediaType = 'unknown';
+
+  if (googleDriveFileId) {
+    mediaUrl = buildDriveViewUrl(googleDriveFileId);
+    mediaType = 'drive';
+  } else if (mediaId) {
+    try {
+      const refreshed = await refreshMediaUrl(organizationId, mediaId);
+      if (refreshed.url) {
+        mediaUrl = refreshed.url;
+        mediaType = refreshed.type || 'video';
+      }
+      if (refreshed.thumbnailUrl) {
+        thumbnailUrl = refreshed.thumbnailUrl;
+      }
+    } catch (refreshErr) {
+      console.warn('[dashboard] insight media refresh fallback', refreshErr.message);
+      mediaUrl = thumbnailUrl;
+      mediaType = metaVideoId ? 'video' : 'image';
+    }
+  } else {
+    mediaUrl = thumbnailUrl;
+    mediaType = metaVideoId ? 'video' : 'image';
+  }
+
   return {
     id: r.ad_id,
+    meta_ad_id: r.meta_ad_id,
     name: r.ad_name,
     primary_text: primaryText,
     headline: headline,
     cta_type: ctaType,
-    media_url: thumbnailUrl,
+    creative_meta: {
+      object_type: rawCreative.object_type || null,
+      link_url: rawCreative.link_url || null,
+      is_dynamic: Boolean(rawCreative.asset_feed_spec),
+      instagram_permalink_url: rawCreative.instagram_permalink_url || null,
+    },
+    media_id: mediaId,
+    meta_video_id: metaVideoId,
+    thumbnail_url: thumbnailUrl,
+    media_type: mediaType,
+    media_url: mediaUrl,
     performance_snapshot: r.performance_snapshot || { roas: 0, ctr: 0, spend: 0 },
     performance_daily,
+    delivery: metaAggregated.delivery,
+    funnel: metaAggregated.funnel,
+    video_retention: metaAggregated.videoRetention,
+    video_metrics: metaAggregated.video,
+    video_play_curve: metaAggregated.videoPlayCurve,
+    creative_health: metaAggregated.creativeHealth,
     ai_analysis: r.ai_analysis || null,
   };
+}
+
+async function getAdMetaBreakdowns(organizationId, adId, { breakdown, period = '30d' } = {}) {
+  const adRow = await db.Ad.findOne({ where: { id: adId, organizationId } });
+  if (!adRow) {
+    const err = new Error('Ad not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (!adRow.metaAdId) {
+    const err = new Error('ad_missing_meta_id');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  return metaBreakdowns.fetchAdBreakdowns(organizationId, adRow.metaAdId, { breakdown, period });
+}
+
+/**
+ * Distribuição de formatos (9:16, 1:1, etc.) dos criativos importados da org.
+ */
+async function getCreativeFormats(organizationId) {
+  const rows = await db.sequelize.query(
+    `SELECT
+      ad.id AS ad_id,
+      ad.name AS ad_name,
+      ad.raw_creative_data,
+      ad.is_dynamic_creative,
+      camp.name AS campaign_name,
+      ma.ingest_metadata
+    FROM ads ad
+    LEFT JOIN ad_sets asn ON asn.id = ad.ad_set_id
+    LEFT JOIN campaigns camp ON camp.id = asn.campaign_id AND camp.organization_id = :organizationId
+    LEFT JOIN media_assets ma ON ma.meta_video_id = ad.meta_video_id
+    WHERE ad.organization_id = :organizationId
+    ORDER BY ad.name ASC`,
+    {
+      replacements: { organizationId },
+      type: QueryTypes.SELECT,
+    },
+  );
+
+  return creativeFormat.buildFormatsDistribution(rows);
 }
 
 module.exports = {
   getOverview,
   getInsights,
   getInsightDetails,
+  getAdMetaBreakdowns,
   listImportedCampaigns,
   refreshMediaUrl,
+  getCreativeFormats,
 };

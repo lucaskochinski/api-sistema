@@ -37,6 +37,18 @@ function resolveOrganizationId(req) {
   throw err;
 }
 
+async function listAdAccounts(req, res, next) {
+  try {
+    const organizationId = resolveOrganizationId(req);
+    ensureActiveJwtMembership(req, organizationId);
+
+    const items = await metasyncService.listAdAccounts(organizationId);
+    res.json({ items });
+  } catch (e) {
+    next(e);
+  }
+}
+
 async function listLiveCampaigns(req, res, next) {
   try {
     const organizationId = resolveOrganizationId(req);
@@ -125,6 +137,7 @@ async function importAd(req, res, next) {
 }
 
 module.exports = {
+  listAdAccounts,
   listLiveCampaigns,
   listLiveAdsByCampaign,
   importAd,

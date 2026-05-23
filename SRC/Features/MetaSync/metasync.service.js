@@ -8,6 +8,8 @@ const { enqueueVideoAnalyzeJob } = require('../../Workers/queues/videoTranscript
 const planLimits = require('../../Services/plan_limits.service');
 const transcriptionUsage = require('../../Services/transcription_usage.service');
 const metaCreativeParser = require('./meta_ad_creative_parser');
+const creativeFormat = require('../../Services/creative_format.service');
+const { INSIGHT_FIELDS } = require('../../Services/meta_insights_metrics.service');
 
 const GRAPH_PAGE_LIMIT = Math.min(
   200,
@@ -21,15 +23,20 @@ const ADSET_FIELDS = ['id', 'name', 'status', 'campaign_id', 'updated_time'].joi
 const CREATIVE_GRAPH_FIELDS = [
   'id',
   'name',
+  'object_type',
   'body',
   'title',
   'call_to_action_type',
   'thumbnail_url',
   'image_url',
   'video_id',
+  'link_url',
+  'status',
+  'effective_object_story_id',
+  'effective_instagram_media_id',
+  'instagram_permalink_url',
   'object_story_spec',
   'asset_feed_spec',
-  'effective_object_story_id',
 ].join(',');
 
 const AD_FIELDS = [
@@ -51,19 +58,6 @@ const LIVE_AD_FIELDS = [
 ].join(',');
 
 const META_IMPORT_PIPELINE_LABEL = 'meta_creative_import';
-
-const INSIGHT_FIELDS = [
-  'date_start',
-  'date_stop',
-  'impressions',
-  'clicks',
-  'spend',
-  'ctr',
-  'actions',
-  'action_values',
-  'purchase_roas',
-  'video_play_actions',
-].join(',');
 
 /** Chave mensal consumida ao importar 1 anúncio/criativo (analítica). */
 function creativeImportMetricKey() {
@@ -340,11 +334,46 @@ async function ensureMediaClaimAndEnqueueIfNew({
   adPk,
   metaAdIdStr,
   metaVideoId,
+  thumbnailUrl = null,
+  objectType = null,
   accessToken,
   actingUserProfile = null,
 }) {
   const existing = await db.MediaAsset.findOne({ where: { metaVideoId } });
   if (existing) {
+    const currentMeta =
+      existing.ingestMetadata && typeof existing.ingestMetadata === 'object'
+        ? existing.ingestMetadata
+        : {};
+    const nextMeta = { ...currentMeta };
+    if (metaAdIdStr && !nextMeta.metaAdGraphId) {
+      nextMeta.metaAdGraphId = metaAdIdStr;
+    }
+    if (thumbnailUrl && !nextMeta.thumbnailUrl) {
+      nextMeta.thumbnailUrl = thumbnailUrl;
+    }
+    if (objectType && !nextMeta.objectType) {
+      nextMeta.objectType = objectType;
+    }
+    if (accessToken && metaVideoId && !nextMeta.nativeFormat?.width) {
+      try {
+        const vhead = await graph.fbGet(accessToken, String(metaVideoId), {
+          fields: 'length,format',
+        });
+        const native = creativeFormat.extractNativeFormatFromVideoPayload(vhead);
+        if (native.width) nextMeta.width = native.width;
+        if (native.height) nextMeta.height = native.height;
+        if (native.filter) nextMeta.formatFilter = native.filter;
+        if (native.length != null) nextMeta.videoLength = native.length;
+        nextMeta.nativeFormat = native;
+      } catch (_) {
+        /** best-effort */
+      }
+    }
+    if (JSON.stringify(nextMeta) !== JSON.stringify(currentMeta)) {
+      await existing.update({ ingestMetadata: nextMeta });
+    }
+
     await db.OrganizationMediaClaim.findOrCreate({
       where: { organizationId, mediaId: existing.id },
       defaults: {
@@ -356,13 +385,15 @@ async function ensureMediaClaimAndEnqueueIfNew({
   }
 
   let graphVideoLength = null;
+  let nativeFormat = { width: null, height: null, filter: null, length: null };
   if (accessToken && metaVideoId) {
     try {
       /** @type {object} */
       const vhead = await graph.fbGet(accessToken, String(metaVideoId), {
-        fields: 'length',
+        fields: 'length,format',
       });
-      if (vhead && vhead.length != null) graphVideoLength = Number(vhead.length);
+      nativeFormat = creativeFormat.extractNativeFormatFromVideoPayload(vhead);
+      if (nativeFormat.length != null) graphVideoLength = Number(nativeFormat.length);
     } catch (_) {
       /** falha silenciosa — worker usará outros sinais. */
     }
@@ -376,6 +407,13 @@ async function ensureMediaClaimAndEnqueueIfNew({
       discoveredViaMetaCreativeImport: true,
       metaAdGraphId: metaAdIdStr,
       organizationHint: organizationId,
+      thumbnailUrl: thumbnailUrl || null,
+      objectType: objectType || null,
+      width: nativeFormat.width,
+      height: nativeFormat.height,
+      formatFilter: nativeFormat.filter,
+      videoLength: nativeFormat.length,
+      nativeFormat,
       graphVideoLengthSeconds:
         Number.isFinite(graphVideoLength) && graphVideoLength > 0 ? graphVideoLength : null,
     },
@@ -554,6 +592,49 @@ async function syncDailyPerformanceInternal(organizationId, adPkUuid, since, unt
   }
 
   return { adId: adRow.id, metaAdId: adRow.metaAdId, insightRows: rows.length, daysWritten };
+}
+
+/**
+ * Lista contas de anúncio Meta acessíveis via OAuth da org (Graph `me/adaccounts`).
+ * Persiste/atualiza registros em `meta_ad_accounts` para reutilização nas rotas de import.
+ */
+async function listAdAccounts(organizationId) {
+  const { accessToken } = await metaService.getValidToken(organizationId);
+  const rows = await graph.iterateAllEdges(accessToken, 'me/adaccounts', {
+    fields: 'id,name,account_status',
+    limit: GRAPH_PAGE_LIMIT,
+  });
+
+  const items = [];
+  for (const row of rows) {
+    const metaActId = actGraphPrefix(row.id);
+    const name =
+      row.name != null && String(row.name).trim()
+        ? String(row.name).trim()
+        : `Conta Meta ${stripActPrefix(metaActId)}`;
+
+    const existing = await db.MetaAdAccount.findOne({
+      where: { organizationId, metaActId },
+    });
+    if (existing) {
+      if (existing.name !== name) {
+        await existing.update({ name });
+      }
+    } else {
+      await db.MetaAdAccount.create({ organizationId, metaActId, name });
+    }
+
+    items.push({
+      id: stripActPrefix(metaActId),
+      metaActId,
+      name,
+      accountStatus:
+        row.account_status != null ? Number(row.account_status) : null,
+    });
+  }
+
+  items.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+  return items;
 }
 
 /**
@@ -740,6 +821,9 @@ async function ingestSingleAdHierarchy({
   const hydrated = await hydrateCreative(accessToken, adObj.creative);
   const parsedCreative = metaCreativeParser.parseAdCreativeForStorage(hydrated);
   const { creativeId, videoId } = extractCreativeAndVideoIds(hydrated);
+  const thumbnailUrl = pickThumbnailFromCreative(hydrated);
+  const objectType =
+    hydrated && hydrated.object_type != null ? String(hydrated.object_type) : null;
 
   let adRow = await db.Ad.findOne({
     where: { organizationId, metaAdId: metaAdNorm },
@@ -773,6 +857,8 @@ async function ingestSingleAdHierarchy({
       adPk: adRow.id,
       metaAdIdStr: metaAdNorm,
       metaVideoId: videoId,
+      thumbnailUrl,
+      objectType,
       accessToken,
       actingUserProfile,
     });
@@ -897,6 +983,7 @@ async function importAndAnalyzeAd({
 }
 
 module.exports = {
+  listAdAccounts,
   listLiveCampaigns,
   listLiveAdsByCampaign,
   importAndAnalyzeAd,

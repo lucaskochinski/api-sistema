@@ -71,6 +71,9 @@ function shrinkRawCreative(creative) {
     video_id: c.video_id,
     thumbnail_url: c.thumbnail_url,
     image_url: c.image_url,
+    link_url: c.link_url,
+    instagram_permalink_url: c.instagram_permalink_url,
+    effective_instagram_media_id: c.effective_instagram_media_id,
     object_story_spec: c.object_story_spec || null,
     asset_feed_spec: c.asset_feed_spec || null,
   };

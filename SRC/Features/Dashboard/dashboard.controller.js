@@ -54,7 +54,8 @@ async function overview(req, res, next) {
     const organizationId = resolveOrganizationId(req);
     ensureMembershipMatches(req, organizationId);
 
-    const data = await dashboardService.getOverview(organizationId);
+    const periodRaw = req.query.period != null ? String(req.query.period).trim() : 'today';
+    const data = await dashboardService.getOverview(organizationId, { period: periodRaw });
     res.json(data);
   } catch (e) {
     next(e);
@@ -106,6 +107,25 @@ async function insightDetails(req, res, next) {
   }
 }
 
+async function adMetaBreakdowns(req, res, next) {
+  try {
+    const organizationId = resolveOrganizationId(req);
+    ensureMembershipMatches(req, organizationId);
+    assertUuid(req.params.adId, 'ad_id');
+
+    const breakdown = req.query.breakdown != null ? String(req.query.breakdown).trim() : 'platform_position';
+    const period = req.query.period != null ? String(req.query.period).trim() : '30d';
+
+    const data = await dashboardService.getAdMetaBreakdowns(organizationId, req.params.adId, {
+      breakdown,
+      period,
+    });
+    res.json(data);
+  } catch (e) {
+    next(e);
+  }
+}
+
 async function importedCampaigns(req, res, next) {
   try {
     const organizationId = resolveOrganizationId(req);
@@ -132,14 +152,21 @@ async function getExternalSalesStats(req, res, next) {
     }
 
     const db = require('../../Models');
+    const metaMetrics = require('../../Services/meta_insights_metrics.service');
 
-    // Buscar todas as vendas externas gravadas no banco
+    const periodRaw = req.query.period != null ? String(req.query.period).trim() : '30d';
+    const { since, until } = metaMetrics.resolvePeriodDates(periodRaw);
+
     const sales = await db.ExternalSale.findAll({
       where: {
         organizationId,
-        platform
+        platform,
+        saleDate: {
+          [db.Sequelize.Op.gte]: new Date(`${since}T00:00:00.000Z`),
+          [db.Sequelize.Op.lte]: new Date(`${until}T23:59:59.999Z`),
+        },
       },
-      order: [['sale_date', 'ASC']]
+      order: [['sale_date', 'ASC']],
     });
 
     if (sales.length === 0) {
@@ -154,13 +181,17 @@ async function getExternalSalesStats(req, res, next) {
         ],
         profitByHour: Array.from({ length: 24 }, (_, i) => ({
           hora: `${String(i).padStart(2, '0')}:00`,
-          valor: 0
+          valor: 0,
         })),
-        isDemoData: false
+        revenueByHour: Array.from({ length: 24 }, (_, i) => ({
+          hora: `${String(i).padStart(2, '0')}:00`,
+          valor: 0,
+        })),
+        isDemoData: false,
+        dateRange: { since, until },
       });
     }
 
-    // Agregação de dados reais
     let totalRevenue = 0;
     let totalSales = sales.length;
 
@@ -170,25 +201,21 @@ async function getExternalSalesStats(req, res, next) {
     let otherCount = 0;
 
     const hourlyRevenue = Array.from({ length: 24 }, () => 0);
-    const hourlySpend = Array.from({ length: 24 }, () => 50 + Math.floor(Math.random() * 80)); // Simula custo por hora
 
-    sales.forEach(sale => {
+    sales.forEach((sale) => {
       const amt = parseFloat(sale.amount || 0);
       const statusClean = String(sale.status || '').toLowerCase();
-      
-      // Contar receita apenas para transações completadas/aprovadas
+
       if (['paid', 'approved', 'succeeded', 'pago', 'completed'].includes(statusClean)) {
         totalRevenue += amt;
       }
 
-      // Contar meios de pagamento
       const method = String(sale.paymentMethod || '').toLowerCase();
       if (method === 'pix') pixCount++;
       else if (method === 'credit_card') cardCount++;
       else if (method === 'billet') billetCount++;
       else otherCount++;
 
-      // Extrair hora da venda
       const hour = new Date(sale.saleDate).getHours();
       if (hour >= 0 && hour < 24) {
         hourlyRevenue[hour] += amt;
@@ -196,24 +223,28 @@ async function getExternalSalesStats(req, res, next) {
     });
 
     const salesByPaymentMethod = [
-      { name: "Pix", value: pixCount, color: "#1d4ed8" },
-      { name: "Cartão", value: cardCount, color: "#60a5fa" },
-      { name: "Boleto", value: billetCount, color: "#fbbf24" },
-      { name: "Outros", value: otherCount, color: "#4b5563" }
+      { name: 'Pix', value: pixCount, color: '#1d4ed8' },
+      { name: 'Cartão', value: cardCount, color: '#60a5fa' },
+      { name: 'Boleto', value: billetCount, color: '#fbbf24' },
+      { name: 'Outros', value: otherCount, color: '#4b5563' },
     ];
 
-    const profitByHour = Array.from({ length: 24 }, (_, i) => {
+    const revenueByHour = Array.from({ length: 24 }, (_, i) => {
       const hourLabel = `${String(i).padStart(2, '0')}:00`;
-      const net = hourlyRevenue[i] - hourlySpend[i];
-      return { hora: hourLabel, valor: Math.round(net * 100) / 100 };
+      return {
+        hora: hourLabel,
+        valor: Math.round(hourlyRevenue[i] * 100) / 100,
+      };
     });
 
     return res.json({
       totalRevenue,
       totalSales,
       salesByPaymentMethod,
-      profitByHour,
-      isDemoData: false
+      revenueByHour,
+      profitByHour: revenueByHour,
+      isDemoData: false,
+      dateRange: { since, until },
     });
   } catch (error) {
     next(error);
@@ -233,11 +264,25 @@ async function refreshMedia(req, res, next) {
   }
 }
 
+async function creativeFormats(req, res, next) {
+  try {
+    const organizationId = resolveOrganizationId(req);
+    ensureMembershipMatches(req, organizationId);
+
+    const data = await dashboardService.getCreativeFormats(organizationId);
+    res.json(data);
+  } catch (e) {
+    next(e);
+  }
+}
+
 module.exports = {
   overview,
   insights,
   insightDetails,
+  adMetaBreakdowns,
   importedCampaigns,
   getExternalSalesStats,
   refreshMedia,
+  creativeFormats,
 };

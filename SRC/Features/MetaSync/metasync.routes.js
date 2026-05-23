@@ -8,6 +8,8 @@ const router = Router();
 
 router.use(authMiddleware);
 
+router.get('/ad-accounts', metasyncController.listAdAccounts);
+
 router.get('/account/:metaActId/live-campaigns', metasyncController.listLiveCampaigns);
 
 router.get(

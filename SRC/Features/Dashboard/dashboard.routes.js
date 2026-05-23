@@ -11,7 +11,9 @@ router.use(authMiddleware);
 router.get('/overview', dashboardController.overview);
 router.get('/insights', dashboardController.insights);
 router.get('/insights/:adId', dashboardController.insightDetails);
+router.get('/insights/:adId/meta-breakdowns', dashboardController.adMetaBreakdowns);
 router.get('/imported-campaigns', dashboardController.importedCampaigns);
+router.get('/creative-formats', dashboardController.creativeFormats);
 router.get('/external-sales/:platform', dashboardController.getExternalSalesStats);
 router.get('/media-refresh/:mediaId', dashboardController.refreshMedia);
 
