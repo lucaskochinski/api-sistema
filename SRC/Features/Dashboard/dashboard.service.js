@@ -6,6 +6,7 @@ const creativeFormat = require('../../Services/creative_format.service');
 const metaMetrics = require('../../Services/meta_insights_metrics.service');
 const metaBreakdowns = require('../../Services/meta_insights_breakdown.service');
 const metaVideoPlayback = require('../../Services/meta_video_playback.service');
+const metaMarketingFull = require('../../Services/meta_marketing_full.service');
 
 function clampInt(value, fallback, max) {
   const n = Number.parseInt(value, 10);
