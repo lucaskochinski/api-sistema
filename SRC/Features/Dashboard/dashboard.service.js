@@ -248,6 +248,8 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
         impressions: 0,
         clicks: 0,
         reach: 0,
+        purchaseRevenue: 0,
+        purchases: 0,
         roasWeighted: 0,
         roasSpend: 0,
       });
@@ -257,6 +259,8 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
     daily.impressions += impressions;
     daily.clicks += clicks;
     daily.reach += extracted.reach;
+    daily.purchaseRevenue += extracted.purchaseRevenue;
+    daily.purchases += extracted.purchases;
     daily.roasWeighted += roas * spend;
     daily.roasSpend += spend;
 
@@ -427,6 +431,8 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
       date: d.date,
       label: metaMetrics.formatDailyLabel(d.date),
       spend: Math.round(d.spend * 100) / 100,
+      purchaseRevenue: Math.round(d.purchaseRevenue * 100) / 100,
+      purchases: d.purchases,
       impressions: d.impressions,
       clicks: d.clicks,
       reach: d.reach,
