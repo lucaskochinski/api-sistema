@@ -44,6 +44,49 @@ function readPriceCurrency(body) {
   return String(raw || 'brl').trim().toLowerCase();
 }
 
+function slugifyTierKey(name) {
+  const slug = String(name || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_')
+    .slice(0, 48);
+  return slug || 'plano';
+}
+
+async function ensureUniqueTierKey(baseKey) {
+  let candidate = baseKey;
+  let n = 2;
+  while (
+    await db.Plan.findOne({
+      where: { tierKey: candidate },
+      attributes: ['id'],
+    })
+  ) {
+    const suffix = `_${n}`;
+    candidate = `${baseKey.slice(0, Math.max(1, 63 - suffix.length))}${suffix}`;
+    n += 1;
+  }
+  return candidate;
+}
+
+/** Gera chave interna a partir do nome — admin não precisa preencher. */
+async function resolveTierKeyForCreate(body, displayName) {
+  const explicit = String(body.tier_key ?? body.tierKey ?? '').trim().toLowerCase();
+  if (explicit) {
+    if (!/^[a-z0-9](?:[a-z0-9_-]{0,62})$/.test(explicit)) {
+      const err = new Error('plan_tier_key_invalid');
+      err.statusCode = 400;
+      throw err;
+    }
+    return explicit;
+  }
+  return ensureUniqueTierKey(slugifyTierKey(displayName));
+}
+
 async function resolveStripePriceForPlan({ tierKey, displayName, amountCents, currency, existingPlan = null }) {
   const manualPriceId = existingPlan?.stripePriceId;
   const hasManualOnly =
@@ -170,8 +213,7 @@ async function aggregatesForDashboard() {
 async function createCommercialPlan(payload) {
   const body = payload && typeof payload === 'object' ? payload : {};
 
-  const tierKey = String(body.tier_key ?? body.tierKey ?? '').trim().toLowerCase();
-  const name = String(body.name ?? '').trim();
+  const name = String(body.name ?? body.displayName ?? '').trim();
   const limitsRaw = body.limits;
   const amountCents = readPriceAmountCents(body);
   const currency = readPriceCurrency(body);
@@ -183,12 +225,11 @@ async function createCommercialPlan(payload) {
     return err;
   };
 
-  if (!tierKey || !/^[a-z0-9](?:[a-z0-9_-]{0,62})$/.test(tierKey)) {
-    throw err400('plan_tier_key_invalid');
-  }
   if (!name) {
     throw err400('plan_name_required');
   }
+
+  const tierKey = await resolveTierKeyForCreate(body, name);
 
   let stripeResolved;
   if (manualStripePriceId && amountCents == null) {

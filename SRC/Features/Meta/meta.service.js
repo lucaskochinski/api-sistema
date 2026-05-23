@@ -4,6 +4,13 @@ const axios = require('axios');
 const { Op } = require('sequelize');
 const { IntegrationsMeta, sequelize } = require('../../Models');
 const cipher = require('../../Utils/crypto');
+const integrationConfig = require('../../Services/integration_config.service');
+
+const INTEGRATION_ENV_MAP = {
+  META_APP_ID: 'meta_app_id',
+  META_APP_SECRET: 'meta_app_secret',
+  META_SYSTEM_ACCESS_TOKEN: 'meta_system_access_token',
+};
 
 const REQUIRED_SCOPES = ['ads_read', 'ads_management'];
 const GRAPH_BASE = () => {
@@ -20,11 +27,20 @@ const REFRESH_BEFORE_EXPIRY_SEC = Number(
 );
 
 function requireEnv(name) {
+  const integrationKey = INTEGRATION_ENV_MAP[name];
+  if (integrationKey) {
+    const fromConfig = integrationConfig.get(integrationKey);
+    if (fromConfig) return fromConfig;
+  }
   const v = process.env[name];
   if (!v || String(v).trim() === '') {
     throw new Error(`${name}_not_configured`);
   }
   return v.trim();
+}
+
+function getSystemAccessToken() {
+  return integrationConfig.get('meta_system_access_token') || process.env.META_SYSTEM_ACCESS_TOKEN || '';
 }
 
 function appAccessTokenForDebug() {
@@ -225,9 +241,10 @@ async function persistRefreshedToken(organizationId, newAccessPlain, row) {
 async function getValidAccessTokenForOrganization(organizationId, options = {}) {
   const forceOrgToken = Boolean(options?.forceOrgToken);
 
-  if (process.env.META_SYSTEM_ACCESS_TOKEN && !forceOrgToken) {
+  const systemToken = getSystemAccessToken();
+  if (systemToken && !forceOrgToken) {
     return {
-      accessToken: process.env.META_SYSTEM_ACCESS_TOKEN,
+      accessToken: systemToken,
       expiresAt: null,
       oauthMetadata: { isSystemToken: true },
     };

@@ -1,6 +1,7 @@
 'use strict';
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const integrationConfig = require('./integration_config.service');
 
 /** Legado — transcrição isolada (evite em novos fluxos; preferir holistic). */
 const ANALYSIS_PROMPT_TEMPLATE = `
@@ -37,6 +38,8 @@ Responda ESTRITAMENTE JSON (sem Markdown, sem comentários), schema:
 Se algum campo de texto acima estiver vazio ou "(não informado)", reflita nas sugestões e não invente copy que não exista.`;
 
 function requireApiKey() {
+  const fromConfig = integrationConfig.get('gemini_api_key');
+  if (fromConfig) return fromConfig;
   const keys = ['GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GOOGLE_AI_API_KEY'];
   for (const k of keys) {
     if (process.env[k] && String(process.env[k]).trim()) return String(process.env[k]).trim();

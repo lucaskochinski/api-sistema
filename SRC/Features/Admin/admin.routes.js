@@ -6,6 +6,7 @@ const { requireJwtRole } = require('../../Middlewares/role.middleware');
 
 const adminFinanceController = require('./controllers/admin.finance.controller');
 const adminSettingsController = require('./controllers/admin.settings.controller');
+const adminIntegrationsController = require('./controllers/admin.integrations.controller');
 const adminMetricsController = require('./controllers/admin.metrics.controller');
 const adminOrganizationsController = require('./controllers/admin.organizations.controller');
 const adminUsersController = require('./controllers/admin.users.controller');
@@ -26,6 +27,9 @@ router.delete('/plans/:planId', adminFinanceController.deletePlan);
 
 router.get('/settings', adminSettingsController.list);
 router.put('/settings', adminSettingsController.put);
+
+router.get('/integrations', adminIntegrationsController.getIntegrations);
+router.put('/integrations', adminIntegrationsController.putIntegrations);
 
 router.get('/metrics/overview', adminMetricsController.overview);
 router.get('/metrics/webhooks', adminMetricsController.webhookHealth);

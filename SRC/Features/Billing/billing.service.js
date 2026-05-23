@@ -4,11 +4,12 @@ const Stripe = require('stripe');
 const { UniqueConstraintError, Op } = require('sequelize');
 const db = require('../../Models');
 const planLimits = require('../../Services/plan_limits.service');
+const integrationConfig = require('../../Services/integration_config.service');
 
 let _stripe;
 
 function stripeSecret() {
-  const k = process.env.STRIPE_SECRET_KEY;
+  const k = integrationConfig.get('stripe_secret_key');
   if (!k || !String(k).trim()) {
     const err = new Error('STRIPE_SECRET_KEY_not_configured');
     err.statusCode = 503;
@@ -18,13 +19,17 @@ function stripeSecret() {
 }
 
 function webhookSecret() {
-  const w = process.env.STRIPE_WEBHOOK_SECRET;
+  const w = integrationConfig.get('stripe_webhook_secret');
   if (!w || !String(w).trim()) {
     const err = new Error('STRIPE_WEBHOOK_SECRET_not_configured');
     err.statusCode = 503;
     throw err;
   }
   return String(w).trim();
+}
+
+function resetStripeClient() {
+  _stripe = null;
 }
 
 function stripeClient() {
@@ -35,11 +40,7 @@ function stripeClient() {
 }
 
 function publicBaseUrl() {
-  return (
-    process.env.PUBLIC_APP_URL ||
-    process.env.APP_BASE_URL ||
-    'http://localhost:3000'
-  ).replace(/\/+$/, '');
+  return integrationConfig.getPublicAppUrl();
 }
 
 function sanitizeStripeSubscriptionSnapshot(sub) {
@@ -597,7 +598,7 @@ function buildBillingAlerts(subRow) {
 /** Planos disponíveis para checkout (públicos + exclusivos da org). */
 async function listCheckoutPlans(organizationId) {
   const orgId = String(organizationId || '').trim();
-  return db.Plan.findAll({
+  const rows = await db.Plan.findAll({
     where: {
       isActive: true,
       [Op.or]: [
@@ -615,8 +616,20 @@ async function listCheckoutPlans(organizationId) {
       'customOrganizationId',
       'priceAmountCents',
       'priceCurrency',
+      'stripePriceId',
     ],
-    order: [['displayName', 'ASC']],
+    order: [
+      ['priceAmountCents', 'ASC NULLS LAST'],
+      ['displayName', 'ASC'],
+    ],
+  });
+
+  return rows.map((row) => {
+    const plain = row.get({ plain: true });
+    const priceId = plain.stripePriceId ? String(plain.stripePriceId).trim() : '';
+    const canCheckout = Boolean(priceId && !priceId.startsWith('price_hooko_'));
+    delete plain.stripePriceId;
+    return { ...plain, canCheckout };
   });
 }
 
@@ -680,4 +693,5 @@ module.exports = {
   handleStripeWebhook,
   listCheckoutPlans,
   getBillingStatus,
+  resetStripeClient,
 };

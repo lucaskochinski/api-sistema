@@ -1,12 +1,13 @@
 'use strict';
 
 const Stripe = require('stripe');
+const integrationConfig = require('./integration_config.service');
 
 let _stripe;
 
 function stripeClient() {
   if (!_stripe) {
-    const k = process.env.STRIPE_SECRET_KEY;
+    const k = integrationConfig.get('stripe_secret_key');
     if (!k || !String(k).trim()) {
       const err = new Error('STRIPE_SECRET_KEY_not_configured');
       err.statusCode = 503;
@@ -15,6 +16,10 @@ function stripeClient() {
     _stripe = new Stripe(String(k).trim());
   }
   return _stripe;
+}
+
+function resetStripeClient() {
+  _stripe = null;
 }
 
 function lookupKeyForTier(tierKey, interval = 'month') {
@@ -142,4 +147,5 @@ module.exports = {
   syncStripeProductName,
   lookupKeyForTier,
   stripeClient,
+  resetStripeClient,
 };

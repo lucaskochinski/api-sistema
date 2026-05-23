@@ -116,10 +116,10 @@ async function listPlans(req, res, next) {
   try {
     const organizationId = resolveOrganizationId(req);
     ensureMembershipMatches(req, organizationId);
-    const rows = await billingService.listCheckoutPlans(organizationId);
+    const items = await billingService.listCheckoutPlans(organizationId);
     res.json({
       organizationId,
-      items: rows.map((r) => r.get({ plain: true })),
+      items,
     });
   } catch (e) {
     next(e);

@@ -12,6 +12,7 @@ const { ensureDailySyncScheduleOnBoot } = require('./Services/daily_sync.schedul
 const { ensureAdminTestAdSeeded } = require('./Services/admin_meta_seed.service');
 const { ensureDefaultPlansSeeded } = require('./Services/default_plans_seed.service');
 const { runPendingMigrations } = require('./Services/run_migrations.service');
+const { loadIntegrationConfig } = require('./Services/integration_config.service');
 
 /**
  * Auto-inicialização idempotente do usuário Super Admin principal solicitado.
@@ -172,6 +173,10 @@ async function bootstrap() {
 
   await bootstrapDatabase().catch((e) => {
     console.warn('[bootstrapDatabase] falhou (migrate / DB?):', e?.message || e);
+  });
+
+  await loadIntegrationConfig().catch((e) => {
+    console.warn('[integrationConfig] falhou ao carregar:', e?.message || e);
   });
 
   await initializeAdmin().catch((e) => {

@@ -2,6 +2,7 @@
 
 const db = require('../Models');
 const stripePlans = require('./stripe_plans.service');
+const integrationConfig = require('./integration_config.service');
 
 /** Vitrine inicial — idempotente por `tier_key`. Stripe sincronizado automaticamente quando configurado. */
 const DEFAULT_PLANS = [
@@ -49,7 +50,7 @@ function seedEnabled() {
 }
 
 function stripeConfigured() {
-  return Boolean(process.env.STRIPE_SECRET_KEY && String(process.env.STRIPE_SECRET_KEY).trim());
+  return Boolean(integrationConfig.get('stripe_secret_key'));
 }
 
 async function syncPlanStripe(spec) {

@@ -1,6 +1,7 @@
 'use strict';
 
 const axios = require('axios');
+const integrationConfig = require('./integration_config.service');
 
 /**
  * Deepgram pré-gravado: envia payload binário (vídeo/áudio) e retorna transcrição.
@@ -8,7 +9,7 @@ const axios = require('axios');
  */
 
 function apiKey() {
-  const key = process.env.DEEPGRAM_API_KEY;
+  const key = integrationConfig.get('deepgram_api_key');
   if (!key || !key.trim()) {
     throw new Error('DEEPGRAM_API_KEY_not_configured');
   }

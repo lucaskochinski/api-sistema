@@ -72,7 +72,10 @@ async function getStatus(req, res, next) {
     assertOrganizationUuid(req.query.organizationId);
     ensureActiveJwtMembership(req, req.query.organizationId);
 
-    if (process.env.META_SYSTEM_ACCESS_TOKEN) {
+    const integrationConfig = require('../../Services/integration_config.service');
+    const systemToken =
+      integrationConfig.get('meta_system_access_token') || process.env.META_SYSTEM_ACCESS_TOKEN || '';
+    if (systemToken) {
       return res.json({ connected: true, isSystemToken: true });
     }
 
