@@ -571,7 +571,7 @@ async function syncDailyPerformanceInternal(organizationId, adPkUuid, since, unt
     throw err;
   }
 
-  const { accessToken } = await metaService.getValidToken(organizationId);
+  const { accessToken } = await metaService.getValidToken(organizationId, { preferOrgToken: true });
 
   const timeRange = JSON.stringify({ since, until });
   const rows = await graph.iterateAllEdges(
@@ -599,7 +599,7 @@ async function syncDailyPerformanceInternal(organizationId, adPkUuid, since, unt
  * Persiste/atualiza registros em `meta_ad_accounts` para reutilização nas rotas de import.
  */
 async function listAdAccounts(organizationId) {
-  const { accessToken } = await metaService.getValidToken(organizationId);
+  const { accessToken } = await metaService.getValidToken(organizationId, { preferOrgToken: true });
   const rows = await graph.iterateAllEdges(accessToken, 'me/adaccounts', {
     fields: 'id,name,account_status',
     limit: GRAPH_PAGE_LIMIT,
@@ -642,7 +642,7 @@ async function listAdAccounts(organizationId) {
  */
 async function listLiveCampaigns(organizationId, metaActIdFromRoute) {
   const metaAccount = await resolveMetaAccountForOrg(organizationId, metaActIdFromRoute);
-  const { accessToken } = await metaService.getValidToken(organizationId);
+  const { accessToken } = await metaService.getValidToken(organizationId, { preferOrgToken: true });
   const act = actGraphPrefix(metaActIdFromRoute);
   const items = await graph.iterateAllEdges(accessToken, `${act}/campaigns`, {
     fields: LIVE_CAM_FIELDS,
@@ -682,7 +682,7 @@ async function listLiveAdsByCampaign(
   metaCampaignGraphId,
 ) {
   const metaAccount = await resolveMetaAccountForOrg(organizationId, metaActIdFromRoute);
-  const { accessToken } = await metaService.getValidToken(organizationId);
+  const { accessToken } = await metaService.getValidToken(organizationId, { preferOrgToken: true });
   const digits = stripActPrefix(metaAccount.metaActId);
 
   /** @type {object} */
@@ -910,7 +910,7 @@ async function importAndAnalyzeAd({
     organizationId,
     metaActIdFromRoute,
   );
-  const { accessToken } = await metaService.getValidToken(organizationId);
+  const { accessToken } = await metaService.getValidToken(organizationId, { preferOrgToken: true });
 
   const metaNorm = String(metaAdGraphId).trim();
   const existingAd = await db.Ad.findOne({

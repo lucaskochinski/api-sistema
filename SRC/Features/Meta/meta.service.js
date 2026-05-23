@@ -218,9 +218,24 @@ async function persistRefreshedToken(organizationId, newAccessPlain, row) {
 
 /**
  * Único ponto que devolve o access token Meta em plaintext para jobs internos.
- * Os controllers HTTP não devem retornar este valor ao cliente navegador.
+ * @param {string} organizationId
+ * @param {{ preferOrgToken?: boolean }} [options] — true = token OAuth da org (necessário p/ vídeos/insights do cliente)
  */
-async function getValidAccessTokenForOrganization(organizationId) {
+async function getValidAccessTokenForOrganization(organizationId, options = {}) {
+  const preferOrgToken = Boolean(options?.preferOrgToken);
+
+  if (preferOrgToken) {
+    try {
+      return await loadOrganizationOAuthToken(organizationId);
+    } catch (err) {
+      if (!process.env.META_SYSTEM_ACCESS_TOKEN) throw err;
+      console.warn(
+        '[meta] preferOrgToken failed; falling back to META_SYSTEM_ACCESS_TOKEN',
+        err.message,
+      );
+    }
+  }
+
   if (process.env.META_SYSTEM_ACCESS_TOKEN) {
     console.info('[meta] USING ADMIN BYPASS META_SYSTEM_ACCESS_TOKEN FROM ENV');
     return {
@@ -230,6 +245,10 @@ async function getValidAccessTokenForOrganization(organizationId) {
     };
   }
 
+  return loadOrganizationOAuthToken(organizationId);
+}
+
+async function loadOrganizationOAuthToken(organizationId) {
   const row = await IntegrationsMeta.findOne({
     where: { organizationId, status: { [Op.ne]: 'revoked' } },
   });

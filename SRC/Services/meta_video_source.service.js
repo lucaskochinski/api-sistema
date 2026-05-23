@@ -6,7 +6,7 @@ const metaService = require('../Features/Meta/meta.service');
 const DOWNLOAD_TIMEOUT_MS = Number(process.env.META_VIDEO_DOWNLOAD_TIMEOUT_MS || 600000);
 
 async function fetchVideoMp4ViaGraph(organizationId, metaVideoId) {
-  const { accessToken } = await metaService.getValidToken(organizationId);
+  const { accessToken } = await metaService.getValidToken(organizationId, { preferOrgToken: true });
 
   const v = process.env.META_GRAPH_API_VERSION || 'v21.0';
   const vn = String(v).startsWith('v') ? v : `v${v}`;
