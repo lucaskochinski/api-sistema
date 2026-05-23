@@ -10,6 +10,7 @@ const billingStripeWebhook = require('./Features/Billing/billing.http');
 const { bootstrapDatabase } = require('./bootstrapDatabase.service');
 const { ensureDailySyncScheduleOnBoot } = require('./Services/daily_sync.scheduler.service');
 const { ensureAdminTestAdSeeded } = require('./Services/admin_meta_seed.service');
+const { ensureDemoAdAiAnalysisSeeded } = require('./Services/demo_ad_ai_seed.service');
 const { ensureDefaultPlansSeeded } = require('./Services/default_plans_seed.service');
 const { runPendingMigrations } = require('./Services/run_migrations.service');
 const { loadIntegrationConfig } = require('./Services/integration_config.service');
@@ -191,6 +192,10 @@ async function bootstrap() {
 
   await ensureAdminTestAdSeeded().catch((e) => {
     console.warn('[adminMetaSeed] falhou:', e?.message || e);
+  });
+
+  await ensureDemoAdAiAnalysisSeeded().catch((e) => {
+    console.warn('[demoAiSeed] falhou:', e?.message || e);
   });
 
   await new Promise((resolve, reject) => {

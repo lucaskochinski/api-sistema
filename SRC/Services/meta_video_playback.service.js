@@ -61,8 +61,18 @@ async function fetchVideoSourceById(accessToken, videoId) {
   return null;
 }
 
-async function fetchFromAdAccountVideos(accessToken, metaAdGraphId, videoId) {
-  if (!metaAdGraphId || !videoId) return null;
+function formatAdvideosPlayback(match, videoId) {
+  return {
+    type: 'video',
+    url: match.source,
+    thumbnailUrl: match.picture ? String(match.picture) : null,
+    videoId: String(match.id || videoId),
+    strategy: 'act_advideos',
+  };
+}
+
+async function resolveAdAccountId(accessToken, metaAdGraphId) {
+  if (!metaAdGraphId) return null;
 
   const adHead = await graph.fbGet(accessToken, String(metaAdGraphId), {
     fields: 'account_id',
@@ -70,7 +80,42 @@ async function fetchFromAdAccountVideos(accessToken, metaAdGraphId, videoId) {
   if (graphPayloadHasError(adHead) || !adHead?.account_id) return null;
 
   const actRaw = String(adHead.account_id);
-  const actId = actRaw.startsWith('act_') ? actRaw : `act_${actRaw}`;
+  return actRaw.startsWith('act_') ? actRaw : `act_${actRaw}`;
+}
+
+/** Pagina act_.../advideos até achar o video_id (filtro por id nem sempre funciona na Graph v25). */
+async function findAdvVideoSourceById(accessToken, actId, videoId) {
+  if (!actId || !videoId) return null;
+
+  const maxPages = Number(process.env.META_ADVIDEOS_SEARCH_MAX_PAGES || 30);
+  let after = null;
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const params = {
+      fields: 'id,source,picture,permalink_url,title',
+      limit: 50,
+    };
+    if (after) params.after = after;
+
+    const payload = await graph.fbGet(accessToken, `${actId}/advideos`, params);
+    if (graphPayloadHasError(payload)) return null;
+
+    const rows = Array.isArray(payload.data) ? payload.data : [];
+    const match = rows.find((r) => String(r.id) === String(videoId) && r.source);
+    if (match) return match;
+
+    after = payload.paging?.cursors?.after || null;
+    if (!after) break;
+  }
+
+  return null;
+}
+
+async function fetchFromAdAccountVideos(accessToken, metaAdGraphId, videoId) {
+  if (!metaAdGraphId || !videoId) return null;
+
+  const actId = await resolveAdAccountId(accessToken, metaAdGraphId);
+  if (!actId) return null;
 
   let rows = [];
   try {
@@ -83,16 +128,11 @@ async function fetchFromAdAccountVideos(accessToken, metaAdGraphId, videoId) {
     rows = [];
   }
 
-  const match = rows.find((r) => String(r.id) === String(videoId)) || rows[0];
-  if (match?.source) {
-    return {
-      type: 'video',
-      url: match.source,
-      thumbnailUrl: match.picture ? String(match.picture) : null,
-      videoId: String(match.id || videoId),
-      strategy: 'act_advideos',
-    };
-  }
+  const filtered = rows.find((r) => String(r.id) === String(videoId) && r.source);
+  if (filtered) return formatAdvideosPlayback(filtered, videoId);
+
+  const paginated = await findAdvVideoSourceById(accessToken, actId, videoId);
+  if (paginated?.source) return formatAdvideosPlayback(paginated, videoId);
 
   return null;
 }

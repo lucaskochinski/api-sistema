@@ -55,7 +55,7 @@ async function transcribeMediaBuffer(mediaBuffer, options = {}) {
     options.model ||
     process.env.GEMINI_TRANSCRIBE_MODEL ||
     process.env.GEMINI_MODEL ||
-    'gemini-1.5-flash';
+    'gemini-2.5-flash';
 
   const genAI = new GoogleGenerativeAI(requireGeminiKey());
   const model = genAI.getGenerativeModel({
