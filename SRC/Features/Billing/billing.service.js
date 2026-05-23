@@ -5,6 +5,7 @@ const { UniqueConstraintError, Op } = require('sequelize');
 const db = require('../../Models');
 const planLimits = require('../../Services/plan_limits.service');
 const integrationConfig = require('../../Services/integration_config.service');
+const transcriptionUsage = require('../../Services/transcription_usage.service');
 
 let _stripe;
 
@@ -494,6 +495,45 @@ function daysUntil(date) {
   return Math.ceil(diffMs / (24 * 60 * 60 * 1000));
 }
 
+function creativeImportMetricKey() {
+  return (
+    process.env.USAGE_META_CREATIVE_IMPORT_KEY ||
+    process.env.USAGE_META_CAMPAIGN_IMPORT_KEY ||
+    'meta_creative_import_month'
+  );
+}
+
+async function getCreativeUsageSnapshot(organizationId, actor = null) {
+  const resolved = await planLimits.getResolvedLimitsForOrganization(
+    organizationId,
+    actor,
+  );
+  const metricKey = creativeImportMetricKey();
+  const periodLabel = transcriptionUsage.monthlyPeriodLabelUtc();
+
+  let used = 0;
+  const counterRow = await db.UsageCounter.findOne({
+    where: { organizationId, metricKey, periodLabel },
+  }).catch(() => null);
+  if (counterRow) used = Number(counterRow.value || 0);
+
+  const rawLimit = resolved.limitless
+    ? Number.POSITIVE_INFINITY
+    : planLimits.creativeImportLimitFromResolved(resolved.limits);
+
+  const limit =
+    rawLimit === Number.POSITIVE_INFINITY || rawLimit == null ? null : rawLimit;
+
+  return {
+    metricKey,
+    periodLabel,
+    used,
+    limit,
+    remaining: limit == null ? null : Math.max(0, limit - used),
+    limitless: resolved.limitless,
+  };
+}
+
 function serializeSubscriptionRow(sub) {
   if (!sub) return null;
   const plain = sub.get ? sub.get({ plain: true }) : sub;
@@ -514,6 +554,8 @@ function serializeSubscriptionRow(sub) {
           displayName: plan.displayName,
           limits: plan.limits,
           trialDays: plan.trialDays,
+          priceAmountCents: plan.priceAmountCents,
+          priceCurrency: plan.priceCurrency,
         }
       : null,
   };
@@ -640,10 +682,13 @@ async function listCheckoutPlans(organizationId) {
  */
 async function getBillingStatus(organizationId, actor = null) {
   if (planLimits.isPlatformSuperActor(actor)) {
+    const usage = await getCreativeUsageSnapshot(organizationId, actor);
     return {
       hasActiveSubscription: true,
       bypass: true,
       subscription: null,
+      currentPlanId: null,
+      usage,
       alerts: [],
     };
   }
@@ -656,7 +701,7 @@ async function getBillingStatus(organizationId, actor = null) {
       {
         model: db.Plan,
         as: 'plan',
-        attributes: ['id', 'tierKey', 'displayName', 'limits', 'trialDays'],
+        attributes: ['id', 'tierKey', 'displayName', 'limits', 'trialDays', 'priceAmountCents', 'priceCurrency'],
         required: false,
       },
     ],
@@ -664,6 +709,8 @@ async function getBillingStatus(organizationId, actor = null) {
 
   const subForAlerts = activeSub || latestSub;
   const serialized = serializeSubscriptionRow(subForAlerts);
+  const usage = await getCreativeUsageSnapshot(organizationId, actor);
+  const currentPlanId = serialized?.plan?.id ?? null;
   const hasActiveSubscription = Boolean(
     activeSub && ACTIVE_SUB_STATUSES.has(String(activeSub.status || '').toLowerCase()),
   );
@@ -675,6 +722,8 @@ async function getBillingStatus(organizationId, actor = null) {
       hasActiveSubscription: true,
       bypass: false,
       subscription: serialized,
+      currentPlanId,
+      usage,
       alerts: filtered.filter((a) => a.type !== 'plan_active'),
     };
   }
@@ -683,6 +732,8 @@ async function getBillingStatus(organizationId, actor = null) {
     hasActiveSubscription: false,
     bypass: false,
     subscription: serialized,
+    currentPlanId,
+    usage,
     alerts,
   };
 }
