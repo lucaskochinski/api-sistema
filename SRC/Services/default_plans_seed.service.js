@@ -78,27 +78,59 @@ async function syncPlanStripe(spec) {
   };
 }
 
+function needsDefaultPlanBackfill(existing) {
+  const priceMissing =
+    existing.priceAmountCents == null || Number(existing.priceAmountCents) <= 0;
+  const stripeMissing =
+    !existing.stripePriceId ||
+    String(existing.stripePriceId).trim().startsWith('price_hooko_');
+  const limitsEmpty =
+    !existing.limits ||
+    typeof existing.limits !== 'object' ||
+    Object.keys(existing.limits).length === 0;
+  return priceMissing || stripeMissing || limitsEmpty;
+}
+
 /**
  * Garante 3 planos públicos padrão no boot (checkout + `/api/plans/public`).
- * Não sobrescreve planos já existentes com o mesmo `tier_key`.
+ * Cria planos ausentes e corrige existentes sem preço/Stripe/limits.
  */
 async function ensureDefaultPlansSeeded() {
   if (!seedEnabled()) {
     console.info('[defaultPlansSeed] desabilitado (SEED_DEFAULT_PLANS_ENABLED=false)');
-    return { created: 0, skipped: DEFAULT_PLANS.length };
+    return { created: 0, updated: 0, skipped: DEFAULT_PLANS.length };
   }
 
   let created = 0;
+  let updated = 0;
   let skipped = 0;
 
   for (const spec of DEFAULT_PLANS) {
     const existing = await db.Plan.findOne({ where: { tierKey: spec.tierKey } });
+    const stripe = await syncPlanStripe(spec);
+
     if (existing) {
-      skipped += 1;
+      if (needsDefaultPlanBackfill(existing)) {
+        await existing.update({
+          displayName: spec.displayName,
+          priceAmountCents: spec.priceAmountCents,
+          priceCurrency: existing.priceCurrency || stripe.priceCurrency || 'brl',
+          stripePriceId: stripe.stripePriceId,
+          stripeProductId: stripe.stripeProductId,
+          limits: limitsEmpty(existing.limits) ? spec.limits : existing.limits,
+          trialDays: Number.isFinite(Number(existing.trialDays))
+            ? existing.trialDays
+            : spec.trialDays,
+          isActive: true,
+          isPublic: existing.customOrganizationId ? existing.isPublic : true,
+        });
+        updated += 1;
+        console.info(`[defaultPlansSeed] plano actualizado: ${spec.tierKey} (${spec.displayName})`);
+      } else {
+        skipped += 1;
+      }
       continue;
     }
-
-    const stripe = await syncPlanStripe(spec);
 
     await db.Plan.create({
       tierKey: spec.tierKey,
@@ -118,13 +150,15 @@ async function ensureDefaultPlansSeeded() {
     console.info(`[defaultPlansSeed] plano criado: ${spec.tierKey} (${spec.displayName})`);
   }
 
-  if (created > 0) {
-    console.info(`[defaultPlansSeed] ${created} plano(s) criado(s), ${skipped} já existiam`);
+  if (created > 0 || updated > 0) {
+    console.info(
+      `[defaultPlansSeed] ${created} criado(s), ${updated} actualizado(s), ${skipped} já ok`,
+    );
   } else {
-    console.info('[defaultPlansSeed] planos padrão já presentes');
+    console.info('[defaultPlansSeed] planos padrão já presentes com valores');
   }
 
-  return { created, skipped };
+  return { created, updated, skipped };
 }
 
 module.exports = {

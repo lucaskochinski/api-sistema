@@ -184,7 +184,7 @@ async function bootstrap() {
   });
 
   await ensureDefaultPlansSeeded().catch((e) => {
-    console.warn('[defaultPlansSeed] falhou:', e?.message || e);
+    console.warn('[defaultPlansSeed] falhou — planos públicos podem ficar sem preço:', e?.message || e);
   });
 
   await ensureDailySyncScheduleOnBoot();
