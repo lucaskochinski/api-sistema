@@ -276,11 +276,25 @@ async function creativeFormats(req, res, next) {
   }
 }
 
+async function adMediaPlayback(req, res, next) {
+  try {
+    const organizationId = resolveOrganizationId(req);
+    ensureMembershipMatches(req, organizationId);
+    assertUuid(req.params.adId, 'ad_id');
+
+    const data = await dashboardService.getAdMediaPlayback(organizationId, req.params.adId);
+    res.json(data);
+  } catch (e) {
+    next(e);
+  }
+}
+
 module.exports = {
   overview,
   insights,
   insightDetails,
   adMetaBreakdowns,
+  adMediaPlayback,
   importedCampaigns,
   getExternalSalesStats,
   refreshMedia,

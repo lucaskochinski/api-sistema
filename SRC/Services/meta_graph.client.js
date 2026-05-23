@@ -186,6 +186,14 @@ async function iterateAllEdges(accessToken, relative, params) {
 
     const res = await rlManager.requestWithRetry(execution);
     const payload = res.data || {};
+
+    if (payload.error) {
+      const err = new Error(payload.error.message || 'meta_graph_error');
+      err.statusCode = Number(payload.error.code) === 100 ? 400 : 502;
+      err.metaFb = payload.error;
+      throw err;
+    }
+
     const chunk = Array.isArray(payload.data) ? payload.data : [];
     
     for (const row of chunk) {

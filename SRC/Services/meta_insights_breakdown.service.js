@@ -4,7 +4,7 @@ const metaService = require('../Features/Meta/meta.service');
 const graph = require('./meta_graph.client');
 const metaMetrics = require('./meta_insights_metrics.service');
 
-/** Campos compatíveis com breakdowns de placement (sem video_* — exigem action_type). */
+/** Campos escalares — compatíveis com breakdowns de placement (sem actions/video_*). */
 const BREAKDOWN_FIELDS = [
   'impressions',
   'reach',
@@ -13,10 +13,7 @@ const BREAKDOWN_FIELDS = [
   'ctr',
   'cpc',
   'cpm',
-  'inline_link_clicks',
-  'actions',
-  'action_values',
-  'purchase_roas',
+  'frequency',
 ].join(',');
 
 const BREAKDOWN_FIELDS_MINIMAL = [
@@ -28,8 +25,14 @@ const BREAKDOWN_FIELDS_MINIMAL = [
 ].join(',');
 
 function isInvalidBreakdownComboError(err) {
-  const msg = String(err?.message || err?.metaFb?.message || '').toLowerCase();
-  return msg.includes('breakdown') && (msg.includes('invalid') || msg.includes('(#100)'));
+  const msg = String(
+    err?.message || err?.metaFb?.message || err?.response?.data?.error?.message || '',
+  ).toLowerCase();
+  return (
+    msg.includes('(#100)') ||
+    (msg.includes('breakdown') && msg.includes('invalid')) ||
+    (msg.includes('action_type') && msg.includes('platform_position'))
+  );
 }
 
 function parseBreakdownRow(row, breakdownKey) {
@@ -78,23 +81,28 @@ async function fetchAdBreakdowns(organizationId, metaAdId, { breakdown, period =
   const { accessToken } = await metaService.getValidToken(organizationId);
 
   const timeRange = JSON.stringify({ since, until });
-  let rows;
+  let rows = [];
   let warning = null;
 
-  try {
-    rows = await fetchInsightsBreakdownRows(accessToken, metaAdId, {
-      breakdownKey,
-      timeRange,
-      fields: BREAKDOWN_FIELDS,
-    });
-  } catch (err) {
-    if (!isInvalidBreakdownComboError(err)) throw err;
-    warning = err.message || 'meta_breakdown_fields_fallback';
-    rows = await fetchInsightsBreakdownRows(accessToken, metaAdId, {
-      breakdownKey,
-      timeRange,
-      fields: BREAKDOWN_FIELDS_MINIMAL,
-    });
+  for (const fields of [BREAKDOWN_FIELDS, BREAKDOWN_FIELDS_MINIMAL]) {
+    try {
+      rows = await fetchInsightsBreakdownRows(accessToken, metaAdId, {
+        breakdownKey,
+        timeRange,
+        fields,
+      });
+      break;
+    } catch (err) {
+      if (!isInvalidBreakdownComboError(err) || fields === BREAKDOWN_FIELDS_MINIMAL) {
+        if (isInvalidBreakdownComboError(err)) {
+          warning = err.message || 'meta_breakdown_unavailable';
+          rows = [];
+          break;
+        }
+        throw err;
+      }
+      warning = err.message || 'meta_breakdown_fields_fallback';
+    }
   }
 
   const byDim = new Map();

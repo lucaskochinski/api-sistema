@@ -42,6 +42,78 @@ function graphPayloadHasError(payload) {
   return Boolean(payload && typeof payload === 'object' && payload.error);
 }
 
+async function fetchMetaVideoPlayback(accessToken, { metaVideoId, metaAdGraphId }) {
+  if (metaVideoId) {
+    const vhead = await graph.fbGet(accessToken, String(metaVideoId), {
+      fields: 'source,picture',
+    });
+    if (!graphPayloadHasError(vhead) && vhead?.source) {
+      return {
+        type: 'video',
+        url: vhead.source,
+        thumbnailUrl: vhead.picture || null,
+      };
+    }
+  }
+
+  if (metaAdGraphId) {
+    const adData = await graph.fbGet(accessToken, String(metaAdGraphId), {
+      fields: 'creative{image_url,thumbnail_url,video_id}',
+    });
+    if (graphPayloadHasError(adData)) return null;
+
+    const creative = adData.creative || {};
+    const thumbnailUrl = creative.thumbnail_url || creative.image_url || null;
+
+    if (creative.video_id) {
+      const vhead = await graph.fbGet(accessToken, String(creative.video_id), {
+        fields: 'source,picture',
+      });
+      if (!graphPayloadHasError(vhead) && vhead?.source) {
+        return {
+          type: 'video',
+          url: vhead.source,
+          thumbnailUrl: vhead.picture || thumbnailUrl,
+        };
+      }
+    }
+
+    if (creative.image_url || thumbnailUrl) {
+      return {
+        type: 'image',
+        url: creative.image_url || thumbnailUrl,
+        thumbnailUrl,
+      };
+    }
+  }
+
+  return null;
+}
+
+async function orgCanAccessMedia(organizationId, mediaId, mediaRow) {
+  const claim = await db.OrganizationMediaClaim.findOne({
+    where: { organizationId, mediaId },
+    attributes: ['id'],
+  });
+  if (claim) return true;
+
+  const analysis = await db.CreativeAnalysis.findOne({
+    where: { organizationId, mediaId },
+    attributes: ['id'],
+  });
+  if (analysis) return true;
+
+  if (mediaRow?.metaVideoId) {
+    const ad = await db.Ad.findOne({
+      where: { organizationId, metaVideoId: mediaRow.metaVideoId },
+      attributes: ['id'],
+    });
+    if (ad) return true;
+  }
+
+  return false;
+}
+
 /**
  * KPIs consolidados por organização na série diária de ads + contagem de análises criativas.
  */
@@ -444,96 +516,45 @@ async function listImportedCampaigns(organizationId) {
 }
 
 async function refreshMediaUrl(organizationId, mediaId) {
-  const analysis = await db.CreativeAnalysis.findOne({
-    where: { organizationId, mediaId },
-    include: [{ model: db.MediaAsset, as: 'mediaAsset' }],
-  });
+  const media = await db.MediaAsset.findByPk(mediaId);
 
-  let media = analysis?.mediaAsset || null;
-  if (!media) {
-    const claim = await db.OrganizationMediaClaim.findOne({
-      where: { organizationId, mediaId },
-      include: [{ model: db.MediaAsset, as: 'mediaAsset' }],
-    });
-    media = claim?.mediaAsset || null;
-  }
-
-  if (!media) {
+  if (!media || !(await orgCanAccessMedia(organizationId, mediaId, media))) {
     const err = new Error('media_not_found');
     err.statusCode = 404;
     throw err;
   }
 
-  if (!media.metaVideoId && (!media.ingestMetadata || !media.ingestMetadata.metaAdGraphId)) {
+  const metaAdGraphId = media.ingestMetadata?.metaAdGraphId || null;
+  if (!media.metaVideoId && !metaAdGraphId) {
     const err = new Error('no_meta_reference_for_refresh');
     err.statusCode = 400;
     throw err;
   }
 
   const { accessToken } = await metaService.getValidToken(organizationId);
+  const playback = await fetchMetaVideoPlayback(accessToken, {
+    metaVideoId: media.metaVideoId,
+    metaAdGraphId,
+  });
 
-  if (media.metaVideoId) {
-    const vhead = await graph.fbGet(accessToken, String(media.metaVideoId), {
-      fields: 'source,picture',
-    });
-    if (graphPayloadHasError(vhead)) {
-      const err = new Error(vhead.error.message || 'meta_video_lookup_failed');
-      err.statusCode = 502;
-      throw err;
-    }
-    if (vhead?.source) {
-      const nextMeta = {
-        ...(media.ingestMetadata && typeof media.ingestMetadata === 'object'
-          ? media.ingestMetadata
-          : {}),
-        thumbnailUrl: vhead.picture || media.ingestMetadata?.thumbnailUrl || null,
-        lastRefreshedAt: new Date().toISOString(),
-      };
-      await media.update({ ingestMetadata: nextMeta });
-
-      return {
-        type: 'video',
-        url: vhead.source,
-        thumbnailUrl: vhead.picture || nextMeta.thumbnailUrl || null,
-      };
-    }
+  if (!playback?.url) {
+    const err = new Error('meta_video_source_unavailable');
+    err.statusCode = 502;
+    throw err;
   }
 
-  if (media.ingestMetadata?.metaAdGraphId) {
-    const adGraphId = media.ingestMetadata.metaAdGraphId;
-    const adData = await graph.fbGet(accessToken, String(adGraphId), {
-      fields: 'creative{image_url,thumbnail_url,video_id}',
-    });
-    if (graphPayloadHasError(adData)) {
-      const err = new Error(adData.error.message || 'meta_ad_lookup_failed');
-      err.statusCode = 502;
-      throw err;
-    }
-
-    const creative = adData.creative || {};
-    const thumbnailUrl = creative.thumbnail_url || creative.image_url || null;
-
-    if (creative.video_id) {
-      const vhead = await graph.fbGet(accessToken, String(creative.video_id), {
-        fields: 'source,picture',
-      });
-      if (!graphPayloadHasError(vhead) && vhead?.source) {
-        return {
-          type: 'video',
-          url: vhead.source,
-          thumbnailUrl: vhead.picture || thumbnailUrl,
-        };
-      }
-    }
-
-    return {
-      type: 'image',
-      url: creative.image_url || thumbnailUrl,
-      thumbnailUrl,
+  if (playback.type === 'video' && media.metaVideoId) {
+    const nextMeta = {
+      ...(media.ingestMetadata && typeof media.ingestMetadata === 'object'
+        ? media.ingestMetadata
+        : {}),
+      thumbnailUrl: playback.thumbnailUrl || media.ingestMetadata?.thumbnailUrl || null,
+      lastRefreshedAt: new Date().toISOString(),
     };
+    await media.update({ ingestMetadata: nextMeta });
   }
 
-  return { type: 'unknown', url: null, thumbnailUrl: null };
+  return playback;
 }
 
 async function getInsightDetails(organizationId, adId) {
@@ -684,12 +705,44 @@ async function getInsightDetails(organizationId, adId) {
       }
     } catch (refreshErr) {
       console.warn('[dashboard] insight media refresh fallback', refreshErr.message);
-      mediaUrl = thumbnailUrl;
-      mediaType = metaVideoId ? 'video' : 'image';
+      try {
+        const { accessToken } = await metaService.getValidToken(organizationId);
+        const playback = await fetchMetaVideoPlayback(accessToken, {
+          metaVideoId: metaVideoId || r.ad_meta_video_id,
+          metaAdGraphId: r.meta_ad_id,
+        });
+        if (playback?.url) {
+          mediaUrl = playback.url;
+          mediaType = playback.type || 'video';
+          if (playback.thumbnailUrl) thumbnailUrl = playback.thumbnailUrl;
+        } else {
+          mediaUrl = thumbnailUrl;
+          mediaType = metaVideoId ? 'video' : 'image';
+        }
+      } catch {
+        mediaUrl = thumbnailUrl;
+        mediaType = metaVideoId ? 'video' : 'image';
+      }
     }
   } else {
-    mediaUrl = thumbnailUrl;
-    mediaType = metaVideoId ? 'video' : 'image';
+    try {
+      const { accessToken } = await metaService.getValidToken(organizationId);
+      const playback = await fetchMetaVideoPlayback(accessToken, {
+        metaVideoId: metaVideoId || r.ad_meta_video_id,
+        metaAdGraphId: r.meta_ad_id,
+      });
+      if (playback?.url) {
+        mediaUrl = playback.url;
+        mediaType = playback.type || 'video';
+        if (playback.thumbnailUrl) thumbnailUrl = playback.thumbnailUrl;
+      } else {
+        mediaUrl = thumbnailUrl;
+        mediaType = metaVideoId || r.ad_meta_video_id ? 'video' : 'image';
+      }
+    } catch {
+      mediaUrl = thumbnailUrl;
+      mediaType = metaVideoId || r.ad_meta_video_id ? 'video' : 'image';
+    }
   }
 
   return {
@@ -720,6 +773,29 @@ async function getInsightDetails(organizationId, adId) {
     creative_health: metaAggregated.creativeHealth,
     ai_analysis: r.ai_analysis || null,
   };
+}
+
+async function getAdMediaPlayback(organizationId, adId) {
+  const adRow = await db.Ad.findOne({ where: { id: adId, organizationId } });
+  if (!adRow) {
+    const err = new Error('Ad not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const { accessToken } = await metaService.getValidToken(organizationId);
+  const playback = await fetchMetaVideoPlayback(accessToken, {
+    metaVideoId: adRow.metaVideoId,
+    metaAdGraphId: adRow.metaAdId,
+  });
+
+  if (!playback?.url) {
+    const err = new Error('meta_video_source_unavailable');
+    err.statusCode = 502;
+    throw err;
+  }
+
+  return playback;
 }
 
 async function getAdMetaBreakdowns(organizationId, adId, { breakdown, period = '30d' } = {}) {
@@ -769,6 +845,7 @@ module.exports = {
   getOverview,
   getInsights,
   getInsightDetails,
+  getAdMediaPlayback,
   getAdMetaBreakdowns,
   listImportedCampaigns,
   refreshMediaUrl,
