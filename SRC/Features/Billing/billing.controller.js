@@ -98,7 +98,37 @@ async function portal(req, res, next) {
   }
 }
 
+async function status(req, res, next) {
+  try {
+    const organizationId = resolveOrganizationId(req);
+    ensureMembershipMatches(req, organizationId);
+    const payload = await billingService.getBillingStatus(organizationId, {
+      email: req.user?.email,
+      roles: req.user?.roles,
+    });
+    res.json({ organizationId, ...payload });
+  } catch (e) {
+    next(e);
+  }
+}
+
+async function listPlans(req, res, next) {
+  try {
+    const organizationId = resolveOrganizationId(req);
+    ensureMembershipMatches(req, organizationId);
+    const rows = await billingService.listCheckoutPlans(organizationId);
+    res.json({
+      organizationId,
+      items: rows.map((r) => r.get({ plain: true })),
+    });
+  } catch (e) {
+    next(e);
+  }
+}
+
 module.exports = {
   checkout,
   portal,
+  status,
+  listPlans,
 };

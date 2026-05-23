@@ -1,8 +1,9 @@
 'use strict';
 
 const Stripe = require('stripe');
-const { UniqueConstraintError } = require('sequelize');
+const { UniqueConstraintError, Op } = require('sequelize');
 const db = require('../../Models');
+const planLimits = require('../../Services/plan_limits.service');
 
 let _stripe;
 
@@ -482,8 +483,191 @@ async function handleStripeWebhook(stripeSignatureHeader, rawBody) {
   }
 }
 
+const ACTIVE_SUB_STATUSES = new Set(['active', 'trialing']);
+
+function daysUntil(date) {
+  if (!date) return null;
+  const end = new Date(date);
+  if (Number.isNaN(end.getTime())) return null;
+  const diffMs = end.getTime() - Date.now();
+  return Math.ceil(diffMs / (24 * 60 * 60 * 1000));
+}
+
+function serializeSubscriptionRow(sub) {
+  if (!sub) return null;
+  const plain = sub.get ? sub.get({ plain: true }) : sub;
+  const plan = plain.plan || null;
+  return {
+    id: plain.id,
+    status: plain.status,
+    cancelAtPeriodEnd: Boolean(plain.cancelAtPeriodEnd),
+    currentPeriodStart: plain.currentPeriodStart,
+    currentPeriodEnd: plain.currentPeriodEnd,
+    trialEndsAt: plain.trialEndsAt,
+    cancelAt: plain.cancelAt,
+    canceledAt: plain.canceledAt,
+    plan: plan
+      ? {
+          id: plan.id,
+          tierKey: plan.tierKey,
+          displayName: plan.displayName,
+          limits: plan.limits,
+          trialDays: plan.trialDays,
+        }
+      : null,
+  };
+}
+
+function buildBillingAlerts(subRow) {
+  /** @type {Array<{ type: string, severity: string, title: string, message: string, daysLeft?: number }>} */
+  const alerts = [];
+
+  if (!subRow) {
+    alerts.push({
+      type: 'no_subscription',
+      severity: 'critical',
+      title: 'Escolha um plano',
+      message: 'A sua organização ainda não tem uma assinatura activa. Seleccione um plano para usar o HOOKO.',
+    });
+    return alerts;
+  }
+
+  const status = String(subRow.status || '').toLowerCase();
+
+  if (status === 'past_due' || status === 'unpaid') {
+    alerts.push({
+      type: 'payment_past_due',
+      severity: 'critical',
+      title: 'Pagamento pendente',
+      message: 'Há um problema com o pagamento da assinatura. Actualize o método de pagamento para evitar interrupção.',
+    });
+  }
+
+  if (status === 'trialing') {
+    const daysLeft = daysUntil(subRow.trialEndsAt || subRow.currentPeriodEnd);
+    if (daysLeft != null && daysLeft <= 7) {
+      alerts.push({
+        type: 'trial_ending',
+        severity: daysLeft <= 3 ? 'warning' : 'info',
+        title: 'Trial a terminar',
+        message:
+          daysLeft <= 0
+            ? 'O seu período de trial termina hoje. Confirme o plano para continuar.'
+            : `Faltam ${daysLeft} dia(s) para o fim do trial.`,
+        daysLeft,
+      });
+    }
+  }
+
+  if (subRow.cancelAtPeriodEnd) {
+    const daysLeft = daysUntil(subRow.currentPeriodEnd);
+    alerts.push({
+      type: 'cancel_scheduled',
+      severity: 'warning',
+      title: 'Cancelamento agendado',
+      message:
+        daysLeft != null && daysLeft > 0
+          ? `A assinatura termina em ${daysLeft} dia(s). Pode reactivar no portal de billing.`
+          : 'A assinatura está marcada para cancelar no fim do período actual.',
+      daysLeft: daysLeft ?? undefined,
+    });
+  }
+
+  if (status === 'canceled' || status === 'incomplete_expired') {
+    alerts.push({
+      type: 'subscription_canceled',
+      severity: 'critical',
+      title: 'Assinatura encerrada',
+      message: 'A assinatura foi cancelada. Escolha um plano para voltar a usar o HOOKO.',
+    });
+  }
+
+  if (ACTIVE_SUB_STATUSES.has(status) && !subRow.cancelAtPeriodEnd) {
+    alerts.push({
+      type: 'plan_active',
+      severity: 'info',
+      title: 'Plano activo',
+      message: `Está no plano ${subRow.plan?.displayName || subRow.plan?.tierKey || 'HOOKO'}. Pode alterar ou actualizar no portal.`,
+    });
+  }
+
+  return alerts;
+}
+
+/** Planos disponíveis para checkout (públicos + exclusivos da org). */
+async function listCheckoutPlans(organizationId) {
+  const orgId = String(organizationId || '').trim();
+  return db.Plan.findAll({
+    where: {
+      isActive: true,
+      [Op.or]: [
+        { isPublic: true, customOrganizationId: null },
+        { customOrganizationId: orgId },
+      ],
+    },
+    attributes: ['id', 'tierKey', 'displayName', 'limits', 'trialDays', 'isPublic', 'customOrganizationId'],
+    order: [['displayName', 'ASC']],
+  });
+}
+
+/**
+ * Estado de billing da organização + alertas para modais no frontend.
+ * @param {string} organizationId
+ * @param {{ email?: string, roles?: string[] } | null} actor
+ */
+async function getBillingStatus(organizationId, actor = null) {
+  if (planLimits.isPlatformSuperActor(actor)) {
+    return {
+      hasActiveSubscription: true,
+      bypass: true,
+      subscription: null,
+      alerts: [],
+    };
+  }
+
+  const activeSub = await planLimits.getSubscriptionWithPlan(organizationId);
+  const latestSub = await db.Subscription.findOne({
+    where: { organizationId },
+    order: [['updatedAt', 'DESC']],
+    include: [
+      {
+        model: db.Plan,
+        as: 'plan',
+        attributes: ['id', 'tierKey', 'displayName', 'limits', 'trialDays'],
+        required: false,
+      },
+    ],
+  });
+
+  const subForAlerts = activeSub || latestSub;
+  const serialized = serializeSubscriptionRow(subForAlerts);
+  const hasActiveSubscription = Boolean(
+    activeSub && ACTIVE_SUB_STATUSES.has(String(activeSub.status || '').toLowerCase()),
+  );
+
+  const alerts = buildBillingAlerts(serialized);
+  if (hasActiveSubscription) {
+    const filtered = alerts.filter((a) => a.type !== 'no_subscription' && a.type !== 'subscription_canceled');
+    return {
+      hasActiveSubscription: true,
+      bypass: false,
+      subscription: serialized,
+      alerts: filtered.filter((a) => a.type !== 'plan_active'),
+    };
+  }
+
+  return {
+    hasActiveSubscription: false,
+    bypass: false,
+    subscription: serialized,
+    alerts,
+  };
+}
+
 module.exports = {
   createCheckoutSession,
   createPortalSession,
   handleStripeWebhook,
+  listCheckoutPlans,
+  getBillingStatus,
 };

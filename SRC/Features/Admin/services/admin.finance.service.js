@@ -197,9 +197,166 @@ async function createCommercialPlan(payload) {
   }
 }
 
+async function listCommercialPlans({ limit, offset, includeInactive = true }) {
+  const where = includeInactive ? {} : { isActive: true };
+  return db.Plan.findAndCountAll({
+    where,
+    limit,
+    offset,
+    order: [['createdAt', 'DESC']],
+    include: [
+      {
+        model: db.Organization,
+        as: 'customOrganization',
+        attributes: ['id', 'name', 'slug'],
+        required: false,
+      },
+    ],
+  });
+}
+
+async function getCommercialPlanById(planId) {
+  const id = String(planId || '').trim();
+  if (!UUID_RE.test(id)) {
+    const err = new Error('plan_id_invalid');
+    err.statusCode = 400;
+    throw err;
+  }
+  const plan = await db.Plan.findByPk(id, {
+    include: [
+      {
+        model: db.Organization,
+        as: 'customOrganization',
+        attributes: ['id', 'name', 'slug'],
+        required: false,
+      },
+    ],
+  });
+  if (!plan) {
+    const err = new Error('plan_not_found');
+    err.statusCode = 404;
+    throw err;
+  }
+  return plan.get({ plain: true });
+}
+
+/**
+ * Atualiza plano comercial (tier_key imutável).
+ * @param {string} planId
+ * @param {Record<string, unknown>} payload
+ */
+async function updateCommercialPlan(planId, payload) {
+  const plan = await db.Plan.findByPk(String(planId || '').trim());
+  if (!plan) {
+    const err = new Error('plan_not_found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const body = payload && typeof payload === 'object' ? payload : {};
+  /** @type {Record<string, unknown>} */
+  const patch = {};
+
+  if (body.name != null || body.displayName != null) {
+    const name = String(body.name ?? body.displayName ?? '').trim();
+    if (!name) {
+      const err = new Error('plan_name_required');
+      err.statusCode = 400;
+      throw err;
+    }
+    patch.displayName = name;
+  }
+
+  if (body.stripe_price_id != null || body.stripePriceId != null) {
+    const stripePriceId = String(body.stripe_price_id ?? body.stripePriceId ?? '').trim();
+    if (!stripePriceId) {
+      const err = new Error('plan_stripe_price_id_required');
+      err.statusCode = 400;
+      throw err;
+    }
+    patch.stripePriceId = stripePriceId;
+  }
+
+  if (body.limits != null) {
+    const limitsRaw = body.limits;
+    if (typeof limitsRaw !== 'object' || Array.isArray(limitsRaw)) {
+      const err = new Error('plan_limits_must_be_object');
+      err.statusCode = 400;
+      throw err;
+    }
+    patch.limits = limitsRaw;
+  }
+
+  if (body.trial_days != null || body.trialDays != null) {
+    const td = Number(body.trial_days ?? body.trialDays);
+    patch.trialDays = Number.isFinite(td)
+      ? Math.min(Math.max(Math.floor(td), 0), 730)
+      : 0;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, 'is_public') || Object.prototype.hasOwnProperty.call(body, 'isPublic')) {
+    patch.isPublic = readIsPublic(body);
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(body, 'custom_organization_id') ||
+    Object.prototype.hasOwnProperty.call(body, 'customOrganizationId')
+  ) {
+    const rawCustom =
+      body.custom_organization_id != null ? body.custom_organization_id : body.customOrganizationId;
+    if (rawCustom == null || String(rawCustom).trim() === '') {
+      patch.customOrganizationId = null;
+    } else {
+      const customOrganizationId = String(rawCustom).trim();
+      if (!UUID_RE.test(customOrganizationId)) {
+        const err = new Error('custom_organization_id_invalid');
+        err.statusCode = 400;
+        throw err;
+      }
+      const orgExists = await db.Organization.findByPk(customOrganizationId, { attributes: ['id'] });
+      if (!orgExists) {
+        const err = new Error('custom_organization_not_found');
+        err.statusCode = 400;
+        throw err;
+      }
+      patch.customOrganizationId = customOrganizationId;
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, 'is_active') || Object.prototype.hasOwnProperty.call(body, 'isActive')) {
+    const raw = body.is_active != null ? body.is_active : body.isActive;
+    patch.isActive = coerceBool(raw);
+  }
+
+  if (Object.keys(patch).length === 0) {
+    const err = new Error('plan_patch_empty');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  await plan.update(patch);
+  return plan.get({ plain: true });
+}
+
+/** Desactiva plano (soft delete) — mantém histórico de assinaturas. */
+async function deactivateCommercialPlan(planId) {
+  const plan = await db.Plan.findByPk(String(planId || '').trim());
+  if (!plan) {
+    const err = new Error('plan_not_found');
+    err.statusCode = 404;
+    throw err;
+  }
+  await plan.update({ isActive: false, isPublic: false });
+  return plan.get({ plain: true });
+}
+
 module.exports = {
   listSubscriptions,
   listInvoices,
   aggregatesForDashboard,
   createCommercialPlan,
+  listCommercialPlans,
+  getCommercialPlanById,
+  updateCommercialPlan,
+  deactivateCommercialPlan,
 };

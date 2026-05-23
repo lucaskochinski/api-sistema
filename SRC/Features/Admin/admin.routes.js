@@ -19,7 +19,10 @@ router.use(requireJwtRole(PLATFORM_ADMIN_ROLE));
 router.get('/finance/subscriptions', adminFinanceController.listSubscriptions);
 router.get('/finance/invoices', adminFinanceController.listInvoices);
 router.get('/finance/summary', adminFinanceController.financeSummary);
+router.get('/plans', adminFinanceController.listPlans);
 router.post('/plans', adminFinanceController.createPlan);
+router.patch('/plans/:planId', adminFinanceController.updatePlan);
+router.delete('/plans/:planId', adminFinanceController.deletePlan);
 
 router.get('/settings', adminSettingsController.list);
 router.put('/settings', adminSettingsController.put);

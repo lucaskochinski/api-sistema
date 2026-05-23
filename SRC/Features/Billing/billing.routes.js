@@ -10,5 +10,7 @@ router.use(authMiddleware);
 
 router.post('/checkout', billingController.checkout);
 router.post('/portal', billingController.portal);
+router.get('/status', billingController.status);
+router.get('/plans', billingController.listPlans);
 
 module.exports = router;

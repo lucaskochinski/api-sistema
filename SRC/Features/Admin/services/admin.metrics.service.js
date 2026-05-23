@@ -36,6 +36,32 @@ async function getPlatformOverview() {
     where: { processingStatus: 'processed' },
   }).catch(() => 0);
 
+  const signupsLast7Days = await db.sequelize
+    .query(
+      `SELECT DATE(created_at AT TIME ZONE 'UTC') AS day,
+              COUNT(*)::int AS count
+       FROM users
+       WHERE created_at >= (NOW() AT TIME ZONE 'UTC') - INTERVAL '6 days'
+       GROUP BY day
+       ORDER BY day ASC`,
+      { type: Sequelize.QueryTypes.SELECT },
+    )
+    .catch(() => []);
+
+  const DAY_LABELS = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+  const today = new Date();
+  const series = [];
+  for (let i = 6; i >= 0; i -= 1) {
+    const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - i));
+    const ymd = d.toISOString().slice(0, 10);
+    const match = signupsLast7Days.find((row) => String(row.day).slice(0, 10) === ymd);
+    series.push({
+      date: ymd,
+      label: DAY_LABELS[d.getUTCDay()],
+      value: match ? Number(match.count) || 0 : 0,
+    });
+  }
+
   return {
     organizations: organizationCount,
     users: userCount,
@@ -52,6 +78,7 @@ async function getPlatformOverview() {
             ? row.total
             : String(row.total || 0),
     })),
+    signupsLast7Days: series,
   };
 }
 

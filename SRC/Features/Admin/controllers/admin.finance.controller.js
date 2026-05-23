@@ -51,9 +51,44 @@ async function createPlan(req, res, next) {
   }
 }
 
+async function listPlans(req, res, next) {
+  try {
+    const { limit, offset } = coercePagination(req.query);
+    const includeInactive = req.query.includeInactive !== 'false';
+    adminAudit(req.user?.userId, 'admin.finance.list_plans', { limit, offset, includeInactive });
+    const { rows, count } = await financeService.listCommercialPlans({ limit, offset, includeInactive });
+    res.json({ total: count, limit, offset, items: rows });
+  } catch (e) {
+    next(e);
+  }
+}
+
+async function updatePlan(req, res, next) {
+  try {
+    adminAudit(req.user?.userId, 'admin.finance.plan_update', { planId: req.params.planId });
+    const plan = await financeService.updateCommercialPlan(req.params.planId, req.body || {});
+    res.json(plan);
+  } catch (e) {
+    next(e);
+  }
+}
+
+async function deletePlan(req, res, next) {
+  try {
+    adminAudit(req.user?.userId, 'admin.finance.plan_deactivate', { planId: req.params.planId });
+    const plan = await financeService.deactivateCommercialPlan(req.params.planId);
+    res.json(plan);
+  } catch (e) {
+    next(e);
+  }
+}
+
 module.exports = {
   listSubscriptions,
   listInvoices,
   financeSummary,
   createPlan,
+  listPlans,
+  updatePlan,
+  deletePlan,
 };
