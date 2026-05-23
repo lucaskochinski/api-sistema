@@ -42,48 +42,72 @@ function graphPayloadHasError(payload) {
   return Boolean(payload && typeof payload === 'object' && payload.error);
 }
 
-async function fetchMetaVideoPlayback(accessToken, { metaVideoId, metaAdGraphId }) {
-  if (metaVideoId) {
-    const vhead = await graph.fbGet(accessToken, String(metaVideoId), {
-      fields: 'source,picture',
-    });
-    if (!graphPayloadHasError(vhead) && vhead?.source) {
-      return {
-        type: 'video',
-        url: vhead.source,
-        thumbnailUrl: vhead.picture || null,
-      };
-    }
+const AD_CREATIVE_VIDEO_FIELDS =
+  'creative{video_id,object_type,thumbnail_url,image_url,object_story_spec{video_data{video_id,image_url}}}';
+
+async function fetchVideoSourceById(accessToken, videoId) {
+  if (!videoId) return null;
+  const vhead = await graph.fbGet(accessToken, String(videoId), {
+    fields: 'source,picture,permalink_url',
+  });
+  if (graphPayloadHasError(vhead) || !vhead?.source) return null;
+  return {
+    type: 'video',
+    url: vhead.source,
+    thumbnailUrl: vhead.picture || null,
+  };
+}
+
+function extractVideoIdFromCreative(creative) {
+  if (!creative || typeof creative !== 'object') return null;
+  if (creative.video_id) return String(creative.video_id);
+  const spec = creative.object_story_spec;
+  if (spec?.video_data?.video_id) return String(spec.video_data.video_id);
+  return null;
+}
+
+function extractVideoIdFromRawCreative(rawCreative) {
+  if (!rawCreative || typeof rawCreative !== 'object') return null;
+  if (rawCreative.video_id) return String(rawCreative.video_id);
+  const spec = rawCreative.object_story_spec;
+  if (spec?.video_data?.video_id) return String(spec.video_data.video_id);
+  return null;
+}
+
+async function fetchMetaVideoPlayback(accessToken, { metaVideoId, metaAdGraphId, rawCreative }) {
+  const candidateIds = [
+    metaVideoId,
+    extractVideoIdFromRawCreative(rawCreative),
+  ].filter(Boolean);
+
+  for (const vid of candidateIds) {
+    const playback = await fetchVideoSourceById(accessToken, vid);
+    if (playback) return playback;
   }
 
   if (metaAdGraphId) {
     const adData = await graph.fbGet(accessToken, String(metaAdGraphId), {
-      fields: 'creative{image_url,thumbnail_url,video_id}',
+      fields: AD_CREATIVE_VIDEO_FIELDS,
     });
-    if (graphPayloadHasError(adData)) return null;
+    if (!graphPayloadHasError(adData)) {
+      const creative = adData.creative || {};
+      const creativeVideoId = extractVideoIdFromCreative(creative);
+      if (creativeVideoId) {
+        const playback = await fetchVideoSourceById(accessToken, creativeVideoId);
+        if (playback) return playback;
+      }
 
-    const creative = adData.creative || {};
-    const thumbnailUrl = creative.thumbnail_url || creative.image_url || null;
+      const thumbnailUrl = creative.thumbnail_url || creative.image_url || null;
+      const isVideoCreative =
+        String(creative.object_type || '').toUpperCase() === 'VIDEO' || Boolean(creativeVideoId);
 
-    if (creative.video_id) {
-      const vhead = await graph.fbGet(accessToken, String(creative.video_id), {
-        fields: 'source,picture',
-      });
-      if (!graphPayloadHasError(vhead) && vhead?.source) {
+      if (!isVideoCreative && (creative.image_url || thumbnailUrl)) {
         return {
-          type: 'video',
-          url: vhead.source,
-          thumbnailUrl: vhead.picture || thumbnailUrl,
+          type: 'image',
+          url: creative.image_url || thumbnailUrl,
+          thumbnailUrl,
         };
       }
-    }
-
-    if (creative.image_url || thumbnailUrl) {
-      return {
-        type: 'image',
-        url: creative.image_url || thumbnailUrl,
-        thumbnailUrl,
-      };
     }
   }
 
@@ -537,7 +561,7 @@ async function refreshMediaUrl(organizationId, mediaId) {
     metaAdGraphId,
   });
 
-  if (!playback?.url) {
+  if (!playback?.url || (playback.type === 'image' && media.metaVideoId)) {
     const err = new Error('meta_video_source_unavailable');
     err.statusCode = 502;
     throw err;
@@ -598,10 +622,29 @@ async function getInsightDetails(organizationId, adId) {
 
   const r = rows[0];
 
-  const perfRows = await db.AdPerformanceDaily.findAll({
+  let perfRows = await db.AdPerformanceDaily.findAll({
     where: { organizationId, adId },
     order: [['snapshotDate', 'ASC']],
   });
+
+  if (!perfRows.length && r.meta_ad_id) {
+    try {
+      const metasync = require('../MetaSync/metasync.service');
+      const bounds = metaMetrics.resolvePeriodDates('month');
+      await metasync.syncDailyPerformanceInternal(
+        organizationId,
+        adId,
+        bounds.since,
+        bounds.until,
+      );
+      perfRows = await db.AdPerformanceDaily.findAll({
+        where: { organizationId, adId },
+        order: [['snapshotDate', 'ASC']],
+      });
+    } catch (syncErr) {
+      console.warn('[dashboard] lazy insights sync failed', syncErr.message);
+    }
+  }
 
   const performance_daily = perfRows.map((p) => {
     const extracted = metaMetrics.extractDailyMetrics(p.metricsJsonb);
@@ -664,6 +707,10 @@ async function getInsightDetails(organizationId, adId) {
 
   let mediaId = r.media_id || null;
   let metaVideoId = r.meta_video_id || r.ad_meta_video_id || null;
+  if (!metaVideoId) metaVideoId = extractVideoIdFromRawCreative(rawCreative);
+
+  const isVideoAd =
+    Boolean(metaVideoId) || String(rawCreative.object_type || '').toUpperCase() === 'VIDEO';
 
   if (!mediaId && metaVideoId) {
     const mediaRow = await db.MediaAsset.findOne({ where: { metaVideoId } });
@@ -698,7 +745,8 @@ async function getInsightDetails(organizationId, adId) {
       const refreshed = await refreshMediaUrl(organizationId, mediaId);
       if (refreshed.url) {
         mediaUrl = refreshed.url;
-        mediaType = refreshed.type || 'video';
+        mediaType =
+          refreshed.type === 'image' && isVideoAd ? 'video' : refreshed.type || 'video';
       }
       if (refreshed.thumbnailUrl) {
         thumbnailUrl = refreshed.thumbnailUrl;
@@ -710,18 +758,19 @@ async function getInsightDetails(organizationId, adId) {
         const playback = await fetchMetaVideoPlayback(accessToken, {
           metaVideoId: metaVideoId || r.ad_meta_video_id,
           metaAdGraphId: r.meta_ad_id,
+          rawCreative,
         });
-        if (playback?.url) {
+        if (playback?.url && !(playback.type === 'image' && isVideoAd)) {
           mediaUrl = playback.url;
           mediaType = playback.type || 'video';
           if (playback.thumbnailUrl) thumbnailUrl = playback.thumbnailUrl;
         } else {
           mediaUrl = thumbnailUrl;
-          mediaType = metaVideoId ? 'video' : 'image';
+          mediaType = isVideoAd ? 'video' : 'image';
         }
       } catch {
         mediaUrl = thumbnailUrl;
-        mediaType = metaVideoId ? 'video' : 'image';
+        mediaType = isVideoAd ? 'video' : 'image';
       }
     }
   } else {
@@ -730,19 +779,24 @@ async function getInsightDetails(organizationId, adId) {
       const playback = await fetchMetaVideoPlayback(accessToken, {
         metaVideoId: metaVideoId || r.ad_meta_video_id,
         metaAdGraphId: r.meta_ad_id,
+        rawCreative,
       });
-      if (playback?.url) {
+      if (playback?.url && !(playback.type === 'image' && isVideoAd)) {
         mediaUrl = playback.url;
         mediaType = playback.type || 'video';
         if (playback.thumbnailUrl) thumbnailUrl = playback.thumbnailUrl;
       } else {
         mediaUrl = thumbnailUrl;
-        mediaType = metaVideoId || r.ad_meta_video_id ? 'video' : 'image';
+        mediaType = isVideoAd ? 'video' : 'image';
       }
     } catch {
       mediaUrl = thumbnailUrl;
-      mediaType = metaVideoId || r.ad_meta_video_id ? 'video' : 'image';
+      mediaType = isVideoAd ? 'video' : 'image';
     }
+  }
+
+  if (isVideoAd && mediaType === 'image') {
+    mediaType = 'video';
   }
 
   return {
@@ -783,10 +837,16 @@ async function getAdMediaPlayback(organizationId, adId) {
     throw err;
   }
 
+  const rawCreative =
+    adRow.rawCreativeData && typeof adRow.rawCreativeData === 'object'
+      ? adRow.rawCreativeData
+      : {};
+
   const { accessToken } = await metaService.getValidToken(organizationId);
   const playback = await fetchMetaVideoPlayback(accessToken, {
-    metaVideoId: adRow.metaVideoId,
+    metaVideoId: adRow.metaVideoId || extractVideoIdFromRawCreative(rawCreative),
     metaAdGraphId: adRow.metaAdId,
+    rawCreative,
   });
 
   if (!playback?.url) {
