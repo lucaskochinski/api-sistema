@@ -5,7 +5,7 @@
   "description": "HOOKO API — Meta Ads creative intelligence SaaS",
   "main": "SRC/App.js",
   "scripts": {
-    "start": "node SRC/App.js",
+    "start": "sequelize-cli db:migrate && node SRC/App.js",
     "worker:video": "node SRC/Workers/index.js",
     "worker:daily-sync": "node SRC/Workers/daily-sync.worker.js",
     "migrate": "sequelize-cli db:migrate",

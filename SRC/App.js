@@ -11,6 +11,7 @@ const { bootstrapDatabase } = require('./bootstrapDatabase.service');
 const { ensureDailySyncScheduleOnBoot } = require('./Services/daily_sync.scheduler.service');
 const { ensureAdminTestAdSeeded } = require('./Services/admin_meta_seed.service');
 const { ensureDefaultPlansSeeded } = require('./Services/default_plans_seed.service');
+const { runPendingMigrations } = require('./Services/run_migrations.service');
 
 /**
  * Auto-inicialização idempotente do usuário Super Admin principal solicitado.
@@ -152,6 +153,11 @@ const port = Number(process.env.PORT || 3000);
 
 async function bootstrap() {
   await db.sequelize.authenticate();
+
+  await runPendingMigrations(db.sequelize).catch((e) => {
+    console.error('[migrations] falhou:', e?.message || e);
+    throw e;
+  });
 
   // Permite recriar forçadamente todas as tabelas a partir dos Models em deploys limpos
   if (String(process.env.DB_FORCE_SYNC || '').toLowerCase() === 'true') {
