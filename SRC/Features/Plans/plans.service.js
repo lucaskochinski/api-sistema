@@ -6,7 +6,7 @@ const db = require('../../Models');
 async function listPublicActivePlans() {
   return db.Plan.findAll({
     where: { isActive: true, isPublic: true },
-    attributes: ['id', 'tierKey', 'displayName', 'limits', 'trialDays'],
+    attributes: ['id', 'tierKey', 'displayName', 'limits', 'trialDays', 'priceAmountCents', 'priceCurrency'],
     order: [['displayName', 'ASC']],
   });
 }

@@ -605,7 +605,17 @@ async function listCheckoutPlans(organizationId) {
         { customOrganizationId: orgId },
       ],
     },
-    attributes: ['id', 'tierKey', 'displayName', 'limits', 'trialDays', 'isPublic', 'customOrganizationId'],
+    attributes: [
+      'id',
+      'tierKey',
+      'displayName',
+      'limits',
+      'trialDays',
+      'isPublic',
+      'customOrganizationId',
+      'priceAmountCents',
+      'priceCurrency',
+    ],
     order: [['displayName', 'ASC']],
   });
 }

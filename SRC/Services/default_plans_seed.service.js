@@ -1,13 +1,14 @@
 'use strict';
 
 const db = require('../Models');
+const stripePlans = require('./stripe_plans.service');
 
-/** Vitrine inicial — idempotente por `tier_key`. Stripe IDs são placeholders até configurar no admin. */
+/** Vitrine inicial — idempotente por `tier_key`. Stripe sincronizado automaticamente quando configurado. */
 const DEFAULT_PLANS = [
   {
     tierKey: 'starter',
     displayName: 'HOOKO Starter',
-    stripePriceId: 'price_hooko_starter_demo',
+    priceAmountCents: 9700,
     trialDays: 7,
     limits: {
       creative_imports_per_month: 50,
@@ -19,7 +20,7 @@ const DEFAULT_PLANS = [
   {
     tierKey: 'pro',
     displayName: 'HOOKO Pro',
-    stripePriceId: 'price_hooko_pro_demo',
+    priceAmountCents: 19700,
     trialDays: 14,
     limits: {
       creative_imports_per_month: 200,
@@ -31,7 +32,7 @@ const DEFAULT_PLANS = [
   {
     tierKey: 'scale',
     displayName: 'HOOKO Scale',
-    stripePriceId: 'price_hooko_scale_demo',
+    priceAmountCents: 49700,
     trialDays: 0,
     limits: {
       creative_imports_per_month: 999999,
@@ -45,6 +46,35 @@ const DEFAULT_PLANS = [
 function seedEnabled() {
   const flag = String(process.env.SEED_DEFAULT_PLANS_ENABLED || 'true').toLowerCase();
   return !(flag === 'false' || flag === '0' || flag === 'off');
+}
+
+function stripeConfigured() {
+  return Boolean(process.env.STRIPE_SECRET_KEY && String(process.env.STRIPE_SECRET_KEY).trim());
+}
+
+async function syncPlanStripe(spec) {
+  if (!stripeConfigured()) {
+    return {
+      stripePriceId: `price_hooko_${spec.tierKey}_demo`,
+      stripeProductId: null,
+      priceAmountCents: spec.priceAmountCents,
+      priceCurrency: 'brl',
+    };
+  }
+
+  const synced = await stripePlans.ensureStripePlan({
+    tierKey: spec.tierKey,
+    displayName: spec.displayName,
+    amountCents: spec.priceAmountCents,
+    currency: 'brl',
+  });
+
+  return {
+    stripePriceId: synced.priceId,
+    stripeProductId: synced.productId,
+    priceAmountCents: synced.amountCents,
+    priceCurrency: synced.currency,
+  };
 }
 
 /**
@@ -61,26 +91,30 @@ async function ensureDefaultPlansSeeded() {
   let skipped = 0;
 
   for (const spec of DEFAULT_PLANS) {
-    const [, wasCreated] = await db.Plan.findOrCreate({
-      where: { tierKey: spec.tierKey },
-      defaults: {
-        tierKey: spec.tierKey,
-        displayName: spec.displayName,
-        stripePriceId: spec.stripePriceId,
-        limits: spec.limits,
-        trialDays: spec.trialDays,
-        isActive: true,
-        isPublic: true,
-        customOrganizationId: null,
-      },
+    const existing = await db.Plan.findOne({ where: { tierKey: spec.tierKey } });
+    if (existing) {
+      skipped += 1;
+      continue;
+    }
+
+    const stripe = await syncPlanStripe(spec);
+
+    await db.Plan.create({
+      tierKey: spec.tierKey,
+      displayName: spec.displayName,
+      stripePriceId: stripe.stripePriceId,
+      stripeProductId: stripe.stripeProductId,
+      priceAmountCents: stripe.priceAmountCents,
+      priceCurrency: stripe.priceCurrency,
+      limits: spec.limits,
+      trialDays: spec.trialDays,
+      isActive: true,
+      isPublic: true,
+      customOrganizationId: null,
     });
 
-    if (wasCreated) {
-      created += 1;
-      console.info(`[defaultPlansSeed] plano criado: ${spec.tierKey} (${spec.displayName})`);
-    } else {
-      skipped += 1;
-    }
+    created += 1;
+    console.info(`[defaultPlansSeed] plano criado: ${spec.tierKey} (${spec.displayName})`);
   }
 
   if (created > 0) {

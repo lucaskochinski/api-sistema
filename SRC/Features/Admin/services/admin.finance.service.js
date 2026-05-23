@@ -2,6 +2,7 @@
 
 const db = require('../../../Models');
 const { QueryTypes, UniqueConstraintError } = require('sequelize');
+const stripePlans = require('../../../Services/stripe_plans.service');
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -27,6 +28,58 @@ function readIsPublic(body) {
     return coerceBool(v);
   }
   return true;
+}
+
+function readPriceAmountCents(body) {
+  if (body.price_amount_cents != null) return Number(body.price_amount_cents);
+  if (body.priceAmountCents != null) return Number(body.priceAmountCents);
+  if (body.unit_amount != null) return Number(body.unit_amount);
+  if (body.price_reais != null) return Math.round(Number(body.price_reais) * 100);
+  if (body.priceReais != null) return Math.round(Number(body.priceReais) * 100);
+  return null;
+}
+
+function readPriceCurrency(body) {
+  const raw = body.price_currency ?? body.priceCurrency ?? 'brl';
+  return String(raw || 'brl').trim().toLowerCase();
+}
+
+async function resolveStripePriceForPlan({ tierKey, displayName, amountCents, currency, existingPlan = null }) {
+  const manualPriceId = existingPlan?.stripePriceId;
+  const hasManualOnly =
+    manualPriceId &&
+    String(manualPriceId).trim() &&
+    !String(manualPriceId).startsWith('price_hooko_') &&
+    amountCents == null;
+
+  if (hasManualOnly && !amountCents) {
+    return {
+      stripePriceId: String(manualPriceId).trim(),
+      stripeProductId: existingPlan?.stripeProductId || null,
+      priceAmountCents: existingPlan?.priceAmountCents ?? null,
+      priceCurrency: existingPlan?.priceCurrency || 'brl',
+    };
+  }
+
+  if (amountCents == null || !Number.isFinite(amountCents)) {
+    const err = new Error('plan_price_amount_required');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const synced = await stripePlans.ensureStripePlan({
+    tierKey,
+    displayName,
+    amountCents,
+    currency,
+  });
+
+  return {
+    stripePriceId: synced.priceId,
+    stripeProductId: synced.productId,
+    priceAmountCents: synced.amountCents,
+    priceCurrency: synced.currency,
+  };
 }
 
 async function listSubscriptions({ limit, offset }) {
@@ -119,8 +172,10 @@ async function createCommercialPlan(payload) {
 
   const tierKey = String(body.tier_key ?? body.tierKey ?? '').trim().toLowerCase();
   const name = String(body.name ?? '').trim();
-  const stripePriceIdRaw = String(body.stripe_price_id ?? body.stripePriceId ?? '').trim();
   const limitsRaw = body.limits;
+  const amountCents = readPriceAmountCents(body);
+  const currency = readPriceCurrency(body);
+  const manualStripePriceId = String(body.stripe_price_id ?? body.stripePriceId ?? '').trim();
 
   const err400 = (code) => {
     const err = new Error(code);
@@ -134,8 +189,22 @@ async function createCommercialPlan(payload) {
   if (!name) {
     throw err400('plan_name_required');
   }
-  if (!stripePriceIdRaw) {
-    throw err400('plan_stripe_price_id_required');
+
+  let stripeResolved;
+  if (manualStripePriceId && amountCents == null) {
+    stripeResolved = {
+      stripePriceId: manualStripePriceId,
+      stripeProductId: null,
+      priceAmountCents: null,
+      priceCurrency: currency,
+    };
+  } else {
+    stripeResolved = await resolveStripePriceForPlan({
+      tierKey,
+      displayName: name,
+      amountCents,
+      currency,
+    });
   }
 
   /** @type {Record<string, unknown>} */
@@ -179,7 +248,10 @@ async function createCommercialPlan(payload) {
     const plan = await db.Plan.create({
       tierKey,
       displayName: name,
-      stripePriceId: stripePriceIdRaw,
+      stripePriceId: stripeResolved.stripePriceId,
+      stripeProductId: stripeResolved.stripeProductId,
+      priceAmountCents: stripeResolved.priceAmountCents,
+      priceCurrency: stripeResolved.priceCurrency,
       limits,
       trialDays,
       isPublic,
@@ -267,14 +339,57 @@ async function updateCommercialPlan(planId, payload) {
     patch.displayName = name;
   }
 
-  if (body.stripe_price_id != null || body.stripePriceId != null) {
-    const stripePriceId = String(body.stripe_price_id ?? body.stripePriceId ?? '').trim();
-    if (!stripePriceId) {
-      const err = new Error('plan_stripe_price_id_required');
-      err.statusCode = 400;
-      throw err;
+  const amountCents =
+    body.price_amount_cents != null ||
+    body.priceAmountCents != null ||
+    body.unit_amount != null ||
+    body.price_reais != null ||
+    body.priceReais != null
+      ? readPriceAmountCents(body)
+      : null;
+  const currency = readPriceCurrency(body);
+  const manualStripePriceId =
+    body.stripe_price_id != null || body.stripePriceId != null
+      ? String(body.stripe_price_id ?? body.stripePriceId ?? '').trim()
+      : null;
+
+  const nextDisplayName = patch.displayName ?? plan.displayName;
+  const shouldSyncStripe =
+    amountCents != null ||
+    patch.displayName != null ||
+    manualStripePriceId != null;
+
+  if (shouldSyncStripe) {
+    if (manualStripePriceId && amountCents == null) {
+      patch.stripePriceId = manualStripePriceId;
+    } else if (amountCents != null || (patch.displayName && plan.priceAmountCents != null)) {
+      const synced = await resolveStripePriceForPlan({
+        tierKey: plan.tierKey,
+        displayName: nextDisplayName,
+        amountCents: amountCents ?? plan.priceAmountCents,
+        currency: plan.priceCurrency || currency,
+        existingPlan: plan,
+      });
+      patch.stripePriceId = synced.stripePriceId;
+      patch.stripeProductId = synced.stripeProductId;
+      patch.priceAmountCents = synced.priceAmountCents;
+      patch.priceCurrency = synced.priceCurrency;
+    } else if (patch.displayName && plan.stripeProductId) {
+      await stripePlans.syncStripeProductName({
+        stripeProductId: plan.stripeProductId,
+        displayName: nextDisplayName,
+        tierKey: plan.tierKey,
+      });
+    } else if (patch.displayName && plan.stripePriceId && !String(plan.stripePriceId).startsWith('price_hooko_')) {
+      const synced = await resolveStripePriceForPlan({
+        tierKey: plan.tierKey,
+        displayName: nextDisplayName,
+        amountCents: plan.priceAmountCents,
+        currency: plan.priceCurrency || 'brl',
+        existingPlan: plan,
+      });
+      patch.stripeProductId = synced.stripeProductId;
     }
-    patch.stripePriceId = stripePriceId;
   }
 
   if (body.limits != null) {

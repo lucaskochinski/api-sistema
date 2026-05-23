@@ -34,6 +34,22 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING(128),
         allowNull: true,
       },
+      stripeProductId: {
+        type: DataTypes.STRING(128),
+        allowNull: true,
+        field: 'stripe_product_id',
+      },
+      priceAmountCents: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        field: 'price_amount_cents',
+      },
+      priceCurrency: {
+        type: DataTypes.STRING(3),
+        allowNull: false,
+        defaultValue: 'brl',
+        field: 'price_currency',
+      },
       limits: {
         type: DataTypes.JSONB,
         allowNull: false,
