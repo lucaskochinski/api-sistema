@@ -196,6 +196,8 @@ function buildFormatsDistribution(rows) {
       aspectRatio: facts.aspectRatio,
       videoLengthSeconds: facts.videoLengthSeconds,
       carouselCards: facts.carouselCards,
+      thumbnailUrl: row.format_thumbnail_url || null,
+      mediaId: row.media_id || null,
     });
   }
 

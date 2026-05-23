@@ -1328,19 +1328,45 @@ async function linkVturbVideo(organizationId, adId, vturbVideoId) {
 /**
  * Distribuição de formatos (9:16, 1:1, etc.) dos criativos importados da org.
  */
+function resolveFormatRowThumbnail(row) {
+  const rawCreative =
+    row.raw_creative_data && typeof row.raw_creative_data === 'object'
+      ? row.raw_creative_data
+      : {};
+  const ingestMeta =
+    row.ingest_metadata && typeof row.ingest_metadata === 'object'
+      ? row.ingest_metadata
+      : {};
+  const gdf = row.google_drive_file_id ? String(row.google_drive_file_id).trim() : '';
+  if (gdf) return buildDriveThumbnailUrl(gdf);
+  if (ingestMeta.thumbnailUrl) return String(ingestMeta.thumbnailUrl);
+  return pickThumbnailFromRawCreative(rawCreative);
+}
+
 async function getCreativeFormats(organizationId) {
   const rows = await db.sequelize.query(
-    `SELECT
+    `WITH latest_ca AS (
+      SELECT DISTINCT ON (ad_id)
+        ad_id, media_id
+      FROM creative_analyses
+      WHERE organization_id = :organizationId
+      ORDER BY ad_id, analyzed_at DESC
+    )
+    SELECT
       ad.id AS ad_id,
       ad.name AS ad_name,
       ad.raw_creative_data,
       ad.is_dynamic_creative,
+      ad.meta_video_id,
       camp.name AS campaign_name,
+      ca.media_id,
+      ma.google_drive_file_id,
       ma.ingest_metadata
     FROM ads ad
     LEFT JOIN ad_sets asn ON asn.id = ad.ad_set_id
     LEFT JOIN campaigns camp ON camp.id = asn.campaign_id AND camp.organization_id = :organizationId
-    LEFT JOIN media_assets ma ON ma.meta_video_id = ad.meta_video_id
+    LEFT JOIN latest_ca ca ON ca.ad_id = ad.id
+    LEFT JOIN media_assets ma ON ma.id = ca.media_id
     WHERE ad.organization_id = :organizationId
     ORDER BY ad.name ASC`,
     {
@@ -1349,8 +1375,13 @@ async function getCreativeFormats(organizationId) {
     },
   );
 
+  const enrichedRows = rows.map((row) => ({
+    ...row,
+    format_thumbnail_url: resolveFormatRowThumbnail(row),
+  }));
+
   return {
-    ...creativeFormat.buildFormatsDistribution(rows),
+    ...creativeFormat.buildFormatsDistribution(enrichedRows),
     templateLibrary: require('../../Data/creative_format_templates').listCreativeFormatTemplates(),
     driveFolderUrl: require('../../Data/creative_format_templates').DRIVE_FOLDER_URL,
   };
