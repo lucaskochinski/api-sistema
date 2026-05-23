@@ -24,6 +24,40 @@ function buildDriveThumbnailUrl(googleDriveFileId) {
   return `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w400`;
 }
 
+function parseJsonField(value) {
+  if (value == null) return null;
+  if (typeof value === 'object') return value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function resolveTranscriptFromInsight({ aiAnalysis, ingestMetadata }) {
+  const ai =
+    aiAnalysis && typeof aiAnalysis === 'object' ? aiAnalysis : null;
+  const meta =
+    ingestMetadata && typeof ingestMetadata === 'object' ? ingestMetadata : {};
+
+  const fromAi =
+    (ai?.transcript && String(ai.transcript).trim()) ||
+    (ai?.transcriptSnippet && String(ai.transcriptSnippet).trim()) ||
+    null;
+  if (fromAi) return fromAi;
+
+  const fromIngest =
+    (meta.transcriptFull && String(meta.transcriptFull).trim()) ||
+    (meta.transcript_full && String(meta.transcript_full).trim()) ||
+    null;
+  return fromIngest || null;
+}
+
 function mapAiProcessingState({ processingStatus, hasAnalysis, ingestMetadata }) {
   if (hasAnalysis) {
     return { status: 'completed', label: 'Análise concluída', pending: false };
@@ -1465,6 +1499,25 @@ async function getInsightDetails(organizationId, adId) {
       ingestMeta = mediaRow.ingestMetadata || ingestMeta;
     }
   }
+
+  if (
+    (!ingestMeta.transcriptFull && !ingestMeta.transcript_full) &&
+    metaVideoId
+  ) {
+    const fallbackMedia = await db.MediaAsset.findOne({
+      where: { metaVideoId: String(metaVideoId) },
+    });
+    if (fallbackMedia) {
+      if (!mediaId) mediaId = fallbackMedia.id;
+      if (!mediaProcessingStatus) mediaProcessingStatus = fallbackMedia.processingStatus;
+      ingestMeta = {
+        ...(fallbackMedia.ingestMetadata || {}),
+        ...ingestMeta,
+      };
+    }
+  }
+
+  const aiAnalysis = parseJsonField(r.ai_analysis);
   const googleDriveFileId = r.google_drive_file_id
     ? String(r.google_drive_file_id).trim()
     : '';
@@ -1521,6 +1574,10 @@ async function getInsightDetails(organizationId, adId) {
     }
   }
 
+  const aiUiPayload = aiCreativeUi.buildAiCreativeUi(aiAnalysis || null, {
+    videoMetrics: metaAggregated.video,
+  });
+
   return {
     id: r.ad_id,
     meta_ad_id: r.meta_ad_id,
@@ -1550,19 +1607,15 @@ async function getInsightDetails(organizationId, adId) {
     video_metrics: metaAggregated.video,
     video_play_curve: metaAggregated.videoPlayCurve,
     creative_health: metaAggregated.creativeHealth,
-    ai_analysis: r.ai_analysis || null,
-    ai_ui: aiCreativeUi.buildAiCreativeUi(r.ai_analysis || null, {
-      videoMetrics: metaAggregated.video,
-    }),
+    ai_analysis: aiAnalysis,
+    ai_ui: aiUiPayload,
+    aiUi: aiUiPayload,
     ai_processing: mapAiProcessingState({
       processingStatus: mediaProcessingStatus,
-      hasAnalysis: Boolean(r.ai_analysis),
+      hasAnalysis: Boolean(aiAnalysis),
       ingestMetadata: ingestMeta,
     }),
-    transcript:
-      (r.ai_analysis && typeof r.ai_analysis === 'object' && r.ai_analysis.transcript) ||
-      (ingestMeta.transcriptFull && String(ingestMeta.transcriptFull).trim()) ||
-      null,
+    transcript: resolveTranscriptFromInsight({ aiAnalysis, ingestMetadata: ingestMeta }),
     delivery_note:
       performance_daily.length > 0
         ? null
