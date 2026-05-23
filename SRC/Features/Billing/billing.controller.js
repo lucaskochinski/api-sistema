@@ -126,9 +126,21 @@ async function listPlans(req, res, next) {
   }
 }
 
+async function cancelSubscription(req, res, next) {
+  try {
+    const organizationId = resolveOrganizationId(req);
+    ensureMembershipMatches(req, organizationId);
+    const out = await billingService.cancelSubscriptionAtPeriodEnd(organizationId);
+    res.json({ organizationId, ...out });
+  } catch (e) {
+    next(e);
+  }
+}
+
 module.exports = {
   checkout,
   portal,
   status,
   listPlans,
+  cancelSubscription,
 };

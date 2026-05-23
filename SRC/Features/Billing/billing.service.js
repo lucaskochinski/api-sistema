@@ -738,11 +738,67 @@ async function getBillingStatus(organizationId, actor = null) {
   };
 }
 
+/**
+ * Cancela renovação automática — não cobra mais no cartão após o período actual.
+ * Mantém acesso até current_period_end (cancel_at_period_end no Stripe).
+ */
+async function cancelSubscriptionAtPeriodEnd(organizationId) {
+  const sub = await planLimits.getSubscriptionWithPlan(organizationId);
+  if (!sub?.stripeSubscriptionId) {
+    const err = new Error('subscription_not_found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const status = String(sub.status || '').toLowerCase();
+  if (!ACTIVE_SUB_STATUSES.has(status)) {
+    const err = new Error('subscription_not_active');
+    err.statusCode = 422;
+    throw err;
+  }
+
+  if (sub.cancelAtPeriodEnd) {
+    const serialized = serializeSubscriptionRow(sub);
+    return {
+      alreadyScheduled: true,
+      subscription: serialized,
+      message:
+        'A renovação automática já estava cancelada. Não haverá nova cobrança após o fim do período actual.',
+    };
+  }
+
+  const updated = await stripeClient().subscriptions.update(
+    String(sub.stripeSubscriptionId),
+    { cancel_at_period_end: true },
+  );
+
+  await persistSubscriptionFromStripeObject(updated);
+
+  const refreshed = await db.Subscription.findByPk(sub.id, {
+    include: [
+      {
+        model: db.Plan,
+        as: 'plan',
+        attributes: ['id', 'tierKey', 'displayName', 'limits', 'trialDays', 'priceAmountCents', 'priceCurrency'],
+        required: false,
+      },
+    ],
+  });
+
+  return {
+    alreadyScheduled: false,
+    subscription: serializeSubscriptionRow(refreshed),
+    message:
+      'Renovação automática cancelada. Mantém acesso até ao fim do período já pago — não haverá nova cobrança no cartão.',
+  };
+}
+
 module.exports = {
   createCheckoutSession,
   createPortalSession,
   handleStripeWebhook,
   listCheckoutPlans,
   getBillingStatus,
+  cancelSubscriptionAtPeriodEnd,
   resetStripeClient,
 };

@@ -10,6 +10,7 @@ router.use(authMiddleware);
 
 router.post('/checkout', billingController.checkout);
 router.post('/portal', billingController.portal);
+router.post('/cancel', billingController.cancelSubscription);
 router.get('/status', billingController.status);
 router.get('/plans', billingController.listPlans);
 
