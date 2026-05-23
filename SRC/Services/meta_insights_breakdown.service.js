@@ -13,8 +13,9 @@ const BREAKDOWN_FIELDS = [
   'actions',
   'action_values',
   'video_play_actions',
+  'video_continuous_2_sec_watched_actions',
   'video_p75_watched_actions',
-  'video_3_sec_watched_actions',
+  'video_15_sec_watched_actions',
 ].join(',');
 
 function parseBreakdownRow(row, breakdownKey) {

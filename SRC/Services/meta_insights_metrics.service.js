@@ -17,7 +17,6 @@ const INSIGHT_FIELDS = [
   'cost_per_inline_link_click',
   'outbound_clicks',
   'unique_outbound_clicks',
-  'call_to_action_clicks',
   'inline_post_engagement',
   'actions',
   'action_values',
@@ -29,8 +28,6 @@ const INSIGHT_FIELDS = [
   'conversion_rate_ranking',
   'video_play_actions',
   'video_continuous_2_sec_watched_actions',
-  'video_3_sec_watched_actions',
-  'video_6_sec_watched_actions',
   'video_15_sec_watched_actions',
   'video_30_sec_watched_actions',
   'video_p25_watched_actions',
@@ -47,10 +44,6 @@ const INSIGHT_FIELDS = [
   'video_play_retention_20_to_60s_actions',
   'canvas_avg_view_percent',
   'canvas_avg_view_time',
-  'creative_fatigue_summary',
-  'creative_diversity_score',
-  'creative_diversity_label',
-  'is_video',
 ].join(',');
 
 const PURCHASE_ACTION_TYPES = [
@@ -135,6 +128,26 @@ function sumVideoAction(metricsJsonb, actionField) {
   return actions.reduce((acc, a) => acc + Number(a.value || 0), 0);
 }
 
+function sumCallToActionClicks(metricsJsonb) {
+  const fromActions =
+    sumAction(metricsJsonb, 'call_to_action_click') +
+    sumAction(metricsJsonb, 'call_to_action_clicks');
+  if (fromActions > 0) return fromActions;
+  return numField(metricsJsonb, 'call_to_action_clicks');
+}
+
+function sumVideo3SecHook(metricsJsonb) {
+  const legacy = sumVideoAction(metricsJsonb, 'video_3_sec_watched_actions');
+  if (legacy > 0) return legacy;
+  return sumVideoAction(metricsJsonb, 'video_continuous_2_sec_watched_actions');
+}
+
+function sumVideo6Sec(metricsJsonb) {
+  const legacy = sumVideoAction(metricsJsonb, 'video_6_sec_watched_actions');
+  if (legacy > 0) return legacy;
+  return sumVideoAction(metricsJsonb, 'video_15_sec_watched_actions');
+}
+
 function sumVideoAvgTime(metricsJsonb) {
   const actions = rawRow(metricsJsonb).video_avg_time_watched_actions || [];
   if (!Array.isArray(actions) || !actions.length) return 0;
@@ -171,7 +184,7 @@ function extractDailyMetrics(metricsJsonb) {
     inlineLinkClickCtr: numField(metricsJsonb, 'inline_link_click_ctr'),
     costPerInlineLinkClick: numField(metricsJsonb, 'cost_per_inline_link_click'),
     outboundClicks: numField(metricsJsonb, 'outbound_clicks'),
-    callToActionClicks: numField(metricsJsonb, 'call_to_action_clicks'),
+    callToActionClicks: sumCallToActionClicks(metricsJsonb),
     inlinePostEngagement: numField(metricsJsonb, 'inline_post_engagement'),
     canvasAvgViewPercent: numField(metricsJsonb, 'canvas_avg_view_percent'),
     canvasAvgViewTime: numField(metricsJsonb, 'canvas_avg_view_time'),
@@ -191,8 +204,8 @@ function extractDailyMetrics(metricsJsonb) {
     purchaseRevenue: sumActionValueTypes(metricsJsonb, PURCHASE_ACTION_TYPES),
     videoPlays: sumVideoAction(metricsJsonb, 'video_play_actions'),
     video2s: sumVideoAction(metricsJsonb, 'video_continuous_2_sec_watched_actions'),
-    video3s: sumVideoAction(metricsJsonb, 'video_3_sec_watched_actions'),
-    video6s: sumVideoAction(metricsJsonb, 'video_6_sec_watched_actions'),
+    video3s: sumVideo3SecHook(metricsJsonb),
+    video6s: sumVideo6Sec(metricsJsonb),
     video15s: sumVideoAction(metricsJsonb, 'video_15_sec_watched_actions'),
     video25: sumVideoAction(metricsJsonb, 'video_p25_watched_actions'),
     video50: sumVideoAction(metricsJsonb, 'video_p50_watched_actions'),
