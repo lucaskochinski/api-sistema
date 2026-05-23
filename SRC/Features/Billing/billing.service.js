@@ -5,6 +5,7 @@ const { UniqueConstraintError, Op } = require('sequelize');
 const db = require('../../Models');
 const planLimits = require('../../Services/plan_limits.service');
 const integrationConfig = require('../../Services/integration_config.service');
+const stripePlans = require('../../Services/stripe_plans.service');
 const transcriptionUsage = require('../../Services/transcription_usage.service');
 
 let _stripe;
@@ -42,6 +43,63 @@ function stripeClient() {
 
 function publicBaseUrl() {
   return integrationConfig.getPublicAppUrl();
+}
+
+function isStripeConfigured() {
+  return Boolean(integrationConfig.get('stripe_secret_key'));
+}
+
+function isDemoStripePriceId(priceId) {
+  const id = priceId ? String(priceId).trim() : '';
+  return !id || id.startsWith('price_hooko_');
+}
+
+function planHasBillablePrice(plan) {
+  const cents = Number(plan?.priceAmountCents ?? plan?.price_amount_cents);
+  return Number.isFinite(cents) && cents >= 50;
+}
+
+function planCanCheckout(plan) {
+  if (!planHasBillablePrice(plan)) return false;
+  const priceId = plan.stripePriceId ? String(plan.stripePriceId).trim() : '';
+  if (priceId && !isDemoStripePriceId(priceId)) return true;
+  return isStripeConfigured();
+}
+
+/** Sincroniza preço no Stripe quando o plano só tem valor local ou ID demo. */
+async function ensurePlanStripePrice(plan) {
+  if (!planHasBillablePrice(plan)) {
+    const err = new Error('plan_missing_price');
+    err.statusCode = 422;
+    throw err;
+  }
+
+  const currentId = plan.stripePriceId ? String(plan.stripePriceId).trim() : '';
+  if (currentId && !isDemoStripePriceId(currentId)) {
+    return currentId;
+  }
+
+  if (!isStripeConfigured()) {
+    const err = new Error('plan_missing_stripe_price_id');
+    err.statusCode = 422;
+    throw err;
+  }
+
+  const synced = await stripePlans.ensureStripePlan({
+    tierKey: plan.tierKey,
+    displayName: plan.displayName,
+    amountCents: plan.priceAmountCents,
+    currency: plan.priceCurrency || 'brl',
+  });
+
+  await plan.update({
+    stripePriceId: synced.priceId,
+    stripeProductId: synced.productId,
+    priceAmountCents: synced.amountCents,
+    priceCurrency: synced.currency,
+  });
+
+  return synced.priceId;
 }
 
 function sanitizeStripeSubscriptionSnapshot(sub) {
@@ -108,12 +166,7 @@ async function createCheckoutSession({
     throw err;
   }
 
-  const priceId = plan.stripePriceId ? String(plan.stripePriceId).trim() : '';
-  if (!priceId) {
-    const err = new Error('plan_missing_stripe_price_id');
-    err.statusCode = 422;
-    throw err;
-  }
+  const priceId = await ensurePlanStripePrice(plan);
 
   const td = Number(plan.trialDays != null ? plan.trialDays : 0);
   const trialDays = Number.isFinite(td)
@@ -668,8 +721,7 @@ async function listCheckoutPlans(organizationId) {
 
   return rows.map((row) => {
     const plain = row.get({ plain: true });
-    const priceId = plain.stripePriceId ? String(plain.stripePriceId).trim() : '';
-    const canCheckout = Boolean(priceId && !priceId.startsWith('price_hooko_'));
+    const canCheckout = planCanCheckout(plain);
     delete plain.stripePriceId;
     return { ...plain, canCheckout };
   });

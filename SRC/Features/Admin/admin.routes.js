@@ -10,6 +10,7 @@ const adminIntegrationsController = require('./controllers/admin.integrations.co
 const adminMetricsController = require('./controllers/admin.metrics.controller');
 const adminOrganizationsController = require('./controllers/admin.organizations.controller');
 const adminUsersController = require('./controllers/admin.users.controller');
+const adminSubscriptionsController = require('./controllers/admin.subscriptions.controller');
 
 const router = Router();
 const PLATFORM_ADMIN_ROLE = process.env.PLATFORM_ADMIN_JWT_ROLE_KEY || 'hooko_platform_admin';
@@ -36,6 +37,17 @@ router.get('/metrics/webhooks', adminMetricsController.webhookHealth);
 
 router.get('/organizations', adminOrganizationsController.list);
 router.get('/organizations/:organizationId', adminOrganizationsController.getById);
+router.get('/organizations/:organizationId/billing', adminSubscriptionsController.getBillingContext);
+router.post('/organizations/:organizationId/subscriptions/grant', adminSubscriptionsController.grantPlan);
+router.post('/organizations/:organizationId/subscriptions/checkout', adminSubscriptionsController.createCheckoutLink);
+router.patch(
+  '/organizations/:organizationId/subscriptions/:subscriptionId',
+  adminSubscriptionsController.updateSubscription,
+);
+router.post(
+  '/organizations/:organizationId/subscriptions/:subscriptionId/revoke',
+  adminSubscriptionsController.revokeSubscription,
+);
 
 router.get('/users', adminUsersController.list);
 router.post('/users', adminUsersController.create);

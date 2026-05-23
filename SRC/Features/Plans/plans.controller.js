@@ -6,7 +6,7 @@ async function listPublic(req, res, next) {
   try {
     const rows = await plansService.listPublicActivePlans();
     res.json({
-      items: rows.map((r) => r.get({ plain: true })),
+      items: rows.map((r) => plansService.serializePublicPlan(r)),
     });
   } catch (e) {
     next(e);

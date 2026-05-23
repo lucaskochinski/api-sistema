@@ -37,6 +37,7 @@ async function getOrganizationById(organizationId) {
         model: db.Subscription,
         as: 'subscriptions',
         separate: true,
+        include: [{ model: db.Plan, as: 'plan', required: false }],
       },
       {
         model: db.Membership,

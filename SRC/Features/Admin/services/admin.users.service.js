@@ -42,6 +42,25 @@ async function listUsers({ limit, offset, search }) {
             as: 'organization',
             attributes: ['id', 'name', 'slug'],
             required: false,
+            include: [
+              {
+                model: db.Subscription,
+                as: 'subscriptions',
+                separate: true,
+                limit: 1,
+                where: { status: { [Op.in]: ['active', 'trialing'] } },
+                required: false,
+                order: [['updatedAt', 'DESC']],
+                include: [
+                  {
+                    model: db.Plan,
+                    as: 'plan',
+                    attributes: ['id', 'displayName', 'tierKey', 'priceAmountCents'],
+                    required: false,
+                  },
+                ],
+              },
+            ],
           },
         ],
       },
@@ -67,8 +86,32 @@ async function getUserById(userId) {
           {
             model: db.Organization,
             as: 'organization',
-            attributes: ['id', 'name', 'slug'],
+            attributes: ['id', 'name', 'slug', 'stripeCustomerId'],
             required: false,
+            include: [
+              {
+                model: db.Subscription,
+                as: 'subscriptions',
+                separate: true,
+                limit: 5,
+                order: [['updatedAt', 'DESC']],
+                include: [
+                  {
+                    model: db.Plan,
+                    as: 'plan',
+                    attributes: [
+                      'id',
+                      'displayName',
+                      'tierKey',
+                      'priceAmountCents',
+                      'priceCurrency',
+                      'trialDays',
+                    ],
+                    required: false,
+                  },
+                ],
+              },
+            ],
           },
         ],
       },
