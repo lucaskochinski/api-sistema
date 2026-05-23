@@ -78,17 +78,17 @@ async function syncPlanStripe(spec) {
   };
 }
 
+function limitsEmpty(limits) {
+  return !limits || typeof limits !== 'object' || Object.keys(limits).length === 0;
+}
+
 function needsDefaultPlanBackfill(existing) {
   const priceMissing =
     existing.priceAmountCents == null || Number(existing.priceAmountCents) <= 0;
   const stripeMissing =
     !existing.stripePriceId ||
     String(existing.stripePriceId).trim().startsWith('price_hooko_');
-  const limitsEmpty =
-    !existing.limits ||
-    typeof existing.limits !== 'object' ||
-    Object.keys(existing.limits).length === 0;
-  return priceMissing || stripeMissing || limitsEmpty;
+  return priceMissing || stripeMissing || limitsEmpty(existing.limits);
 }
 
 /**
