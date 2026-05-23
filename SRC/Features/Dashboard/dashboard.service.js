@@ -446,10 +446,10 @@ async function listImportedCampaigns(organizationId) {
 async function refreshMediaUrl(organizationId, mediaId) {
   const analysis = await db.CreativeAnalysis.findOne({
     where: { organizationId, mediaId },
-    include: [{ model: db.MediaAsset, as: 'media' }],
+    include: [{ model: db.MediaAsset, as: 'mediaAsset' }],
   });
 
-  let media = analysis?.media || null;
+  let media = analysis?.mediaAsset || null;
   if (!media) {
     const claim = await db.OrganizationMediaClaim.findOne({
       where: { organizationId, mediaId },
