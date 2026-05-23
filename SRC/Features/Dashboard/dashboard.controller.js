@@ -49,13 +49,31 @@ function ensureMembershipMatches(req, organizationId) {
   }
 }
 
+function parseAdIds(query) {
+  const raw = query.adIds ?? query.ad_ids;
+  if (raw == null || raw === '') return null;
+
+  const parts = Array.isArray(raw)
+    ? raw.flatMap((entry) => String(entry).split(','))
+    : String(raw).split(',');
+
+  const ids = parts.map((part) => String(part).trim()).filter(Boolean);
+  if (!ids.length) return null;
+
+  for (const id of ids) {
+    assertUuid(id, 'ad_id');
+  }
+  return ids;
+}
+
 async function overview(req, res, next) {
   try {
     const organizationId = resolveOrganizationId(req);
     ensureMembershipMatches(req, organizationId);
 
     const periodRaw = req.query.period != null ? String(req.query.period).trim() : 'today';
-    const data = await dashboardService.getOverview(organizationId, { period: periodRaw });
+    const adIds = parseAdIds(req.query);
+    const data = await dashboardService.getOverview(organizationId, { period: periodRaw, adIds });
     res.json(data);
   } catch (e) {
     next(e);

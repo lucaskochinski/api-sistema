@@ -182,8 +182,18 @@ async function orgCanAccessMedia(organizationId, mediaId, mediaRow) {
 /**
  * KPIs consolidados por organização na série diária de ads + contagem de análises criativas.
  */
-async function getOverview(organizationId, { period = 'today' } = {}) {
+async function getOverview(organizationId, { period = 'today', adIds = null } = {}) {
   const { since, until, period: resolvedPeriod } = metaMetrics.resolvePeriodDates(period);
+
+  const normalizedAdIds =
+    Array.isArray(adIds) && adIds.length
+      ? [...new Set(adIds.map((id) => String(id).trim()).filter(Boolean))]
+      : null;
+
+  const adFilterSql = normalizedAdIds ? ' AND a.id IN (:adIds)' : '';
+  const queryReplacements = normalizedAdIds
+    ? { organizationId, since, until, adIds: normalizedAdIds }
+    : { organizationId, since, until };
 
   const [spendAgg] = await db.sequelize.query(
     `SELECT COALESCE(SUM(apd.spend), 0)::decimal AS total_spend
@@ -191,9 +201,9 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
      INNER JOIN ads a ON a.id = apd.ad_id
      WHERE apd.organization_id = :organizationId
        AND apd.snapshot_date >= :since
-       AND apd.snapshot_date <= :until`,
+       AND apd.snapshot_date <= :until${adFilterSql}`,
     {
-      replacements: { organizationId, since, until },
+      replacements: queryReplacements,
       type: QueryTypes.SELECT,
     },
   );
@@ -207,25 +217,35 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
      INNER JOIN ads a ON a.id = apd.ad_id
      WHERE apd.organization_id = :organizationId
        AND apd.snapshot_date >= :since
-       AND apd.snapshot_date <= :until`,
+       AND apd.snapshot_date <= :until${adFilterSql}`,
     {
-      replacements: { organizationId, since, until },
+      replacements: queryReplacements,
       type: QueryTypes.SELECT,
     },
   );
 
+  const analyzedWhere = { organizationId };
+  if (normalizedAdIds) {
+    analyzedWhere.adId = { [db.Sequelize.Op.in]: normalizedAdIds };
+  }
+
   const analyzed = await db.CreativeAnalysis.count({
-    where: { organizationId },
+    where: analyzedWhere,
   });
 
-  const perfRows = await db.AdPerformanceDaily.findAll({
-    where: {
-      organizationId,
-      snapshotDate: {
-        [db.Sequelize.Op.gte]: since,
-        [db.Sequelize.Op.lte]: until,
-      },
+  const perfWhere = {
+    organizationId,
+    snapshotDate: {
+      [db.Sequelize.Op.gte]: since,
+      [db.Sequelize.Op.lte]: until,
     },
+  };
+  if (normalizedAdIds) {
+    perfWhere.adId = { [db.Sequelize.Op.in]: normalizedAdIds };
+  }
+
+  const perfRows = await db.AdPerformanceDaily.findAll({
+    where: perfWhere,
     include: [{ model: db.Ad, as: 'ad', required: true }],
   });
 
@@ -467,6 +487,7 @@ async function getOverview(organizationId, { period = 'today' } = {}) {
   return {
     period: resolvedPeriod,
     dateRange: { since, until },
+    filteredAdIds: normalizedAdIds,
     totalSpend: spendAgg?.total_spend != null ? String(spendAgg.total_spend) : '0',
     globalRoasWeighted:
       roasWeighted[0]?.weighted_roas != null ? String(roasWeighted[0].weighted_roas) : null,
