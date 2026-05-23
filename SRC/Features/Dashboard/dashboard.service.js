@@ -9,6 +9,7 @@ const metaVideoPlayback = require('../../Services/meta_video_playback.service');
 const metaMarketingFull = require('../../Services/meta_marketing_full.service');
 const aiCreativeUi = require('../../Services/ai_creative_ui.service');
 const metaThumbnail = require('../../Services/meta_thumbnail.service');
+const metaPlaybackCache = require('../../Services/meta_playback_cache.service');
 const metaService = require('../Meta/meta.service');
 const graph = require('../../Services/meta_graph.client');
 
@@ -259,8 +260,27 @@ async function loadAdMediaContext(organizationId, { metaVideoId, metaAdGraphId, 
 
 async function resolveInsightMediaPlayback(
   organizationId,
-  { mediaId, metaVideoId, metaAdGraphId, rawCreative, isVideoAd, thumbnailUrl },
+  { mediaId, metaVideoId, metaAdGraphId, rawCreative, isVideoAd, thumbnailUrl, ingestMeta, forceRefresh = false },
 ) {
+  if (!forceRefresh) {
+    const stored = metaPlaybackCache.resolveFromStorage({
+      ingestMeta,
+      rawCreative,
+      isVideoAd,
+      thumbnailUrl,
+    });
+    if (stored) {
+      return applyPlaybackToMedia(stored, { isVideoAd, thumbnailUrl });
+    }
+    const offline = metaPlaybackCache.buildOfflineStub({
+      ingestMeta,
+      rawCreative,
+      isVideoAd,
+      thumbnailUrl,
+    });
+    return applyPlaybackToMedia(offline, { isVideoAd, thumbnailUrl });
+  }
+
   const adContext = await loadAdMediaContext(organizationId, {
     metaVideoId,
     metaAdGraphId,
@@ -273,16 +293,32 @@ async function resolveInsightMediaPlayback(
     rawCreative: adContext.rawCreative || rawCreative,
   });
 
+  if (mediaId && playback?.url && playback.type === 'video') {
+    try {
+      const media = await db.MediaAsset.findByPk(mediaId);
+      if (media) {
+        const nextMeta = metaPlaybackCache.writePlaybackCache(media.ingestMetadata, playback);
+        if (adContext.metaAdGraphId) nextMeta.metaAdGraphId = adContext.metaAdGraphId;
+        await media.update({ ingestMetadata: nextMeta });
+      }
+    } catch (persistErr) {
+      console.warn('[dashboard] playback cache persist failed', persistErr.message);
+    }
+  }
+
   if (!playback?.url && mediaId) {
     try {
       const refreshed = await refreshMediaUrl(organizationId, mediaId, {
         metaAdGraphId: adContext.metaAdGraphId || metaAdGraphId,
         rawCreative: adContext.rawCreative || rawCreative,
+        forceRefresh: true,
       });
       if (refreshed?.url && refreshed.type === 'video') playback = refreshed;
       else if (!playback?.embedUrl && refreshed?.embedUrl) playback = refreshed;
     } catch (refreshErr) {
       console.warn('[dashboard] insight media refresh fallback', refreshErr.message);
+      const cached = metaPlaybackCache.readCachedPlayback(ingestMeta);
+      if (cached) playback = cached;
     }
   }
 
@@ -1291,6 +1327,23 @@ async function refreshMediaUrl(organizationId, mediaId, options = {}) {
     throw err;
   }
 
+  const forceRefresh = Boolean(options.forceRefresh);
+  if (!forceRefresh) {
+    const cached = metaPlaybackCache.readCachedPlayback(media.ingestMetadata);
+    if (cached?.url) {
+      return { ...cached, fromCache: true };
+    }
+  }
+
+  if (graph.rlManager?.isInCooldown?.()) {
+    const cached = metaPlaybackCache.readCachedPlayback(media.ingestMetadata);
+    if (cached) return { ...cached, fromCache: true, rateLimited: true };
+    const err = new Error('meta_rate_limit_cooldown');
+    err.statusCode = 429;
+    err.retryAfterMs = graph.rlManager.getCooldownRemainingMs();
+    throw err;
+  }
+
   const adContext = await loadAdMediaContext(organizationId, {
     metaVideoId: media.metaVideoId,
     metaAdGraphId: options.metaAdGraphId || media.ingestMetadata?.metaAdGraphId || null,
@@ -1321,15 +1374,16 @@ async function refreshMediaUrl(organizationId, mediaId, options = {}) {
     resolvedThumb,
   );
 
-  if ((playback.url && playback.type === 'video') || shouldPersistThumb) {
-    const nextMeta = {
-      ...(media.ingestMetadata && typeof media.ingestMetadata === 'object'
+  if ((playback.url && playback.type === 'video') || shouldPersistThumb || playback.embedUrl) {
+    let nextMeta = metaPlaybackCache.writePlaybackCache(
+      media.ingestMetadata && typeof media.ingestMetadata === 'object'
         ? media.ingestMetadata
-        : {}),
-      thumbnailUrl: resolvedThumb || media.ingestMetadata?.thumbnailUrl || null,
-      lastRefreshedAt: new Date().toISOString(),
-      lastPlaybackStrategy: playback.strategy || null,
-    };
+        : {},
+      playback,
+    );
+    if (shouldPersistThumb) {
+      nextMeta.thumbnailUrl = resolvedThumb || nextMeta.thumbnailUrl || null;
+    }
     if (metaAdGraphId) nextMeta.metaAdGraphId = metaAdGraphId;
     await media.update({ ingestMetadata: nextMeta });
 
@@ -1395,22 +1449,26 @@ async function getInsightDetails(organizationId, adId) {
     order: [['snapshotDate', 'ASC']],
   });
 
-  if (!perfRows.length && r.meta_ad_id) {
-    try {
-      const metasync = require('../MetaSync/metasync.service');
-      const bounds = metaMetrics.resolvePeriodDates('month');
-      await metasync.syncDailyPerformanceInternal(
-        organizationId,
-        adId,
-        bounds.since,
-        bounds.until,
-      );
-      perfRows = await db.AdPerformanceDaily.findAll({
-        where: { organizationId, adId },
-        order: [['snapshotDate', 'ASC']],
-      });
-    } catch (syncErr) {
-      console.warn('[dashboard] lazy insights sync failed', syncErr.message);
+  if (!perfRows.length && r.meta_ad_id && process.env.META_INSIGHT_LAZY_PERF_SYNC === 'true') {
+    if (!graph.rlManager?.isInCooldown?.()) {
+      try {
+        const metasync = require('../MetaSync/metasync.service');
+        const bounds = metaMetrics.resolvePeriodDates('month');
+        await metasync.syncDailyPerformanceInternal(
+          organizationId,
+          adId,
+          bounds.since,
+          bounds.until,
+        );
+        perfRows = await db.AdPerformanceDaily.findAll({
+          where: { organizationId, adId },
+          order: [['snapshotDate', 'ASC']],
+        });
+      } catch (syncErr) {
+        console.warn('[dashboard] lazy insights sync failed', syncErr.message);
+      }
+    } else {
+      console.warn('[dashboard] lazy perf sync skipped — Meta rate limit cooldown activo');
     }
   }
 
@@ -1547,6 +1605,8 @@ async function getInsightDetails(organizationId, adId) {
         rawCreative,
         isVideoAd,
         thumbnailUrl,
+        ingestMeta,
+        forceRefresh: false,
       });
       mediaUrl = applied.mediaUrl;
       mediaType = applied.mediaType;
@@ -1559,7 +1619,13 @@ async function getInsightDetails(organizationId, adId) {
       embedUrl = rawCreative.instagram_permalink_url || null;
     }
 
-    if (metaVideoId && metaThumbnail.looksLikeLowResMetaThumb(thumbnailUrl)) {
+    const skipHdThumbFetch = process.env.META_INSIGHT_HD_THUMB_FETCH !== 'true';
+    if (
+      !skipHdThumbFetch &&
+      metaVideoId &&
+      metaThumbnail.looksLikeLowResMetaThumb(thumbnailUrl) &&
+      !graph.rlManager?.isInCooldown?.()
+    ) {
       try {
         const { accessToken } = await metaService.getValidToken(organizationId);
         const hdThumb = await metaThumbnail.resolveMetaThumbnailUrl(accessToken, {
@@ -1620,6 +1686,16 @@ async function getInsightDetails(organizationId, adId) {
       performance_daily.length > 0
         ? null
         : 'Este anúncio não teve entrega (impressões/gasto) no período sincronizado na Meta.',
+    performance_source: 'database',
+    media_playback_cached: Boolean(
+      metaPlaybackCache.readCachedPlayback(ingestMeta)?.url ||
+        metaPlaybackCache.resolveFromStorage({
+          ingestMeta,
+          rawCreative,
+          isVideoAd,
+          thumbnailUrl,
+        })?.url,
+    ),
   };
 }
 
@@ -1680,7 +1756,7 @@ async function triggerAdAnalysis(organizationId, adId, { force = false, actingUs
   };
 }
 
-async function getAdMediaPlayback(organizationId, adId) {
+async function getAdMediaPlayback(organizationId, adId, { forceRefresh = false } = {}) {
   const adRow = await db.Ad.findOne({ where: { id: adId, organizationId } });
   if (!adRow) {
     const err = new Error('Ad not found');
@@ -1693,11 +1769,54 @@ async function getAdMediaPlayback(organizationId, adId) {
       ? adRow.rawCreativeData
       : {};
 
-  return metaVideoPlayback.fetchMetaVideoPlayback(organizationId, {
-    metaVideoId: adRow.metaVideoId || metaVideoPlayback.extractVideoIdFromRawCreative(rawCreative),
+  let mediaRow = null;
+  const latestCa = await db.CreativeAnalysis.findOne({
+    where: { organizationId, adId },
+    order: [['analyzedAt', 'DESC']],
+    attributes: ['mediaId'],
+  });
+  if (latestCa?.mediaId) {
+    mediaRow = await db.MediaAsset.findByPk(latestCa.mediaId);
+  }
+  if (!mediaRow && adRow.metaVideoId) {
+    mediaRow = await db.MediaAsset.findOne({ where: { metaVideoId: String(adRow.metaVideoId) } });
+  }
+
+  const ingestMeta = mediaRow?.ingestMetadata || null;
+  const metaVideoId =
+    adRow.metaVideoId || metaVideoPlayback.extractVideoIdFromRawCreative(rawCreative);
+
+  if (!forceRefresh) {
+    const stored = metaPlaybackCache.resolveFromStorage({
+      ingestMeta,
+      rawCreative,
+      isVideoAd: Boolean(metaVideoId),
+      thumbnailUrl: ingestMeta?.thumbnailUrl || null,
+    });
+    if (stored?.url || stored?.embedUrl) {
+      return { ...stored, fromCache: true };
+    }
+    if (graph.rlManager?.isInCooldown?.()) {
+      const err = new Error('meta_rate_limit_cooldown');
+      err.statusCode = 429;
+      err.retryAfterMs = graph.rlManager.getCooldownRemainingMs();
+      throw err;
+    }
+  }
+
+  const playback = await metaVideoPlayback.fetchMetaVideoPlayback(organizationId, {
+    metaVideoId,
     metaAdGraphId: adRow.metaAdId,
     rawCreative,
   });
+
+  if (mediaRow && playback?.url) {
+    const nextMeta = metaPlaybackCache.writePlaybackCache(mediaRow.ingestMetadata, playback);
+    if (adRow.metaAdId) nextMeta.metaAdGraphId = adRow.metaAdId;
+    await mediaRow.update({ ingestMetadata: nextMeta }).catch(() => {});
+  }
+
+  return playback;
 }
 
 async function getAdMetaBreakdowns(organizationId, adId, { breakdown, period = '30d' } = {}) {

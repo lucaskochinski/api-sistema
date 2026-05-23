@@ -23,6 +23,38 @@ function sleep(ms) {
 class MetaRateLimitManager {
   constructor(warnThresholdPct = 75) {
     this.warnThreshold = warnThresholdPct;
+    this.cooldownUntilMs = 0;
+    this.lastCooldownLogMs = 0;
+  }
+
+  isInCooldown() {
+    return Date.now() < this.cooldownUntilMs;
+  }
+
+  getCooldownRemainingMs() {
+    return Math.max(0, this.cooldownUntilMs - Date.now());
+  }
+
+  activateCooldown(waitMinutes, reason) {
+    const minutes = Number(waitMinutes) > 0 ? Number(waitMinutes) : 5;
+    const until = Date.now() + minutes * 60 * 1000;
+    this.cooldownUntilMs = Math.max(this.cooldownUntilMs, until);
+
+    if (Date.now() - this.lastCooldownLogMs > 60_000) {
+      const eta = new Date(this.cooldownUntilMs).toISOString();
+      console.warn(
+        `[MetaRateLimit] Cooldown activo até ${eta} (${reason}). Pedidos à Graph serão rejeitados até lá.`,
+      );
+      this.lastCooldownLogMs = Date.now();
+    }
+  }
+
+  throwIfCooldown() {
+    if (!this.isInCooldown()) return;
+    const err = new Error('meta_rate_limit_cooldown');
+    err.statusCode = 429;
+    err.retryAfterMs = this.getCooldownRemainingMs();
+    throw err;
   }
 
   /**
@@ -88,6 +120,8 @@ class MetaRateLimitManager {
    * Wrapper robusto com retry e backoff exponencial base para requisições
    */
   async requestWithRetry(fn, maxRetries = META_MAX_GRAPH_RETRIES) {
+    this.throwIfCooldown();
+
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
         const response = await fn();
@@ -104,10 +138,13 @@ class MetaRateLimitManager {
         const rl = this.parseHeaders(response.headers);
 
         if (rl.shouldBackOff && rl.waitMinutes > 0) {
-          console.warn(`[MetaRateLimit] Limite atingido. Aguardando ${rl.waitMinutes} minutos preventivamente...`);
-          await sleep(rl.waitMinutes * 60 * 1000 + jitterMs(2000));
-        } else if (rl.shouldBackOff) {
-          console.warn(`[MetaRateLimit] Cota próxima do aviso. Dormindo 15s preventivamente...`);
+          this.activateCooldown(rl.waitMinutes, 'header_quota');
+          const err = new Error('meta_rate_limit_header');
+          err.statusCode = 429;
+          err.retryAfterMs = this.getCooldownRemainingMs();
+          throw err;
+        }
+        if (rl.shouldBackOff) {
           await sleep(15000 + jitterMs(1000));
         }
 
@@ -122,6 +159,13 @@ class MetaRateLimitManager {
           statusCode === 429 || 
           [4, 17, 32, 613, 80000, 80003, 80004].includes(errorCode) ||
           /rate|limit|throttle/i.test(err.message || '');
+
+        if (isRateLimit) {
+          this.activateCooldown(
+            errorCode === 80004 ? 15 : 5,
+            `error_code_${errorCode || statusCode}`,
+          );
+        }
 
         if (isRateLimit && attempt < maxRetries - 1) {
           const backoffMs = Math.pow(2, attempt + 1) * 3000 + jitterMs(1000); // 6s, 12s, 24s...

@@ -247,7 +247,9 @@ async function refreshMedia(req, res, next) {
     ensureMembershipMatches(req, organizationId);
     assertUuid(req.params.mediaId, 'media_id');
 
-    const data = await dashboardService.refreshMediaUrl(organizationId, req.params.mediaId);
+    const data = await dashboardService.refreshMediaUrl(organizationId, req.params.mediaId, {
+      forceRefresh: true,
+    });
     res.json(data);
   } catch (e) {
     next(e);
@@ -272,7 +274,14 @@ async function adMediaPlayback(req, res, next) {
     ensureMembershipMatches(req, organizationId);
     assertUuid(req.params.adId, 'ad_id');
 
-    const data = await dashboardService.getAdMediaPlayback(organizationId, req.params.adId);
+    const forceRefresh =
+      req.query.force === '1' ||
+      req.query.force === 'true' ||
+      req.query.refresh === '1';
+
+    const data = await dashboardService.getAdMediaPlayback(organizationId, req.params.adId, {
+      forceRefresh,
+    });
     res.json(data);
   } catch (e) {
     next(e);
