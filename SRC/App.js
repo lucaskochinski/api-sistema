@@ -10,6 +10,7 @@ const billingStripeWebhook = require('./Features/Billing/billing.http');
 const { bootstrapDatabase } = require('./bootstrapDatabase.service');
 const { ensureDailySyncScheduleOnBoot } = require('./Services/daily_sync.scheduler.service');
 const { ensureAdminTestAdSeeded } = require('./Services/admin_meta_seed.service');
+const { ensureDefaultPlansSeeded } = require('./Services/default_plans_seed.service');
 
 /**
  * Auto-inicialização idempotente do usuário Super Admin principal solicitado.
@@ -169,6 +170,10 @@ async function bootstrap() {
 
   await initializeAdmin().catch((e) => {
     console.warn('[initializeAdmin] falhou:', e?.message || e);
+  });
+
+  await ensureDefaultPlansSeeded().catch((e) => {
+    console.warn('[defaultPlansSeed] falhou:', e?.message || e);
   });
 
   await ensureDailySyncScheduleOnBoot();
